@@ -1,0 +1,161 @@
+# Production-stage taxonomy for cost line items.
+# Order matters: stages are checked top → down, first keyword hit wins.
+# Refined against the actual unique values of 报销事项 (item) / 用途 (purpose) /
+# 供应商 (supplier) / 备注 (remarks) in data/pkl/zh/all_months.pkl (2026-01..06).
+#
+# Field priority inside a stage: item (confidence 1.0) > purpose (0.8) >
+# supplier / remarks (0.6).
+stages:
+  logistics_freight:
+    - 运费          # freight (also 模具运费 — freight of a mold is still freight)
+    - 快递
+    - 物流
+    - 寄件          # 寄件费用 / 4月寄件费用
+    - 寄付          # 运费寄付
+    - 到付          # 运费到付 / freight_collect flag
+    - 邮费
+    - 邮寄
+    - 寄货
+  design_prototyping:
+    - 画图          # outsourced 2D/3D art (外发…画图) — the dominant design cost
+    - 扫描          # 3D scanning
+    - 打样
+    - 做样          # 做样办
+    - 样办          # sample making
+    - 打版          # pattern making (garment/print)
+    - 打印          # 3D printing (prototyping)
+    - 3D
+    - 修精细        # head-sculpt refinement
+    - 改神态        # re-sculpting facial expression
+    - 拆件          # parting/separating sculpt into pieces
+    - 设计
+    - 雕刻
+  tooling_molds:
+    - 开模
+    - 模具
+    - 模费          # 搪胶模费
+    - 搪胶模        # rotocast molds (头仔搪胶模…)
+    - 合金模        # alloy molds (定金 included)
+    - 铜模          # 定型铜模
+    - 模芯          # mold core (鞋底模芯做模)
+    - 做模
+    - 冲模
+    - 线割          # wire-cut EDM for molds
+    - 钢模
+    - 铝模
+  injection_molding:
+    - 啤货          # Cantonese: injection/die-cast production run
+    - 注塑
+    - 模压
+    - 成型
+    - 搪胶          # rotocast production (also supplier 搪胶)
+    - 头雕货款      # buying finished molded head sculpts (not 头雕上色 = painting)
+    - 头仔货款      # same, Cantonese
+    - 手臂          # molded arm parts (手连体手臂)
+    - 手枪          # molded pistol parts
+    - 压铸          # die casting (压铸开模 caught earlier by tooling)
+  painting_printing:
+    - 喷油          # spray painting
+    - 喷漆
+    - 上色          # hand painting (head sculpts)
+    - 丝印
+    - 移印
+    - 印刷
+    - 印花          # 数码印花 / 印花章 (fabric printing)
+    - 电镀
+    - 涂装
+    - 水贴          # water-slide decals
+    - 植毛          # flocking
+    - 植绒          # flocking (alt spelling)
+    - 染色          # dyeing (webbing/tapes)
+  assembly_processing:
+    - 手工费        # outsourced handwork (外发手工费)
+    - 做手工
+    - 剪线          # thread trimming (garments)
+    - 切割          # fabric/leather cutting
+    - 车件          # lathe-turned parts
+    - 折弯          # metal bending
+    - 组装
+    - 装配
+    - 加工          # generic processing
+    - 冲压
+    - 焊接          # welding (solder wire 焊锡丝 stays in raw_materials)
+    - 焊扣          # soldering buttons (garment)
+    - 焊配          # soldering parts
+    - 塞棉          # stuffing
+    - 烫片
+    - 绣花
+    - 过朴          # fusing interlining (laser shop)
+    - 木枪          # custom wooden weapon models
+    - 木头          # wooden parts (stocks, handles)
+    - 做头发        # hair making for head sculpts
+  raw_materials:
+    - 原料
+    - 材料
+    - 辅料
+    - PVC
+    - 塑胶
+    - 颜料
+    - 胶水
+    - 开油水        # paint thinner
+    - 酒精
+    - 焊锡
+    - 螺丝
+    - 磁铁
+    - 铜管
+    - 铜片
+    - 五金
+    - 海绵
+    - 软胶          # resin/soft PVC for 3D printing
+    - 红蜡          # casting wax for 3D printing
+    - 胶片
+    - 钻头          # drill bits
+    - 钻嘴
+    - 美纹纸        # masking tape
+    - 插销          # pins
+    - 弹簧          # springs
+    - 保险销        # safety pins/locks
+    - 配件          # generic parts
+  textile_accessories:
+    - 布            # fabrics (大货布/版布/里布/羊皮…) — garment production chain
+    - 线            # thread (buying sewing thread)
+    - 织唛          # woven labels
+    - 织带
+    - 皮            # leather (羊皮/皮料)
+    - 拉链
+    - 扣            # buttons/buckles (圆圈扣/日字扣/衣领扣/饭盒扣…)
+    - 鸡眼          # eyelets
+    - 服装
+    - 么术贴        # velcro
+    - 橡筋          # elastic
+    - 丈巾          # webbing tapes
+    - 棉带          # cotton tape
+    - 绳            # cords
+    - 枪带          # pistol belts
+  packaging:
+    - 包装
+    - 彩盒
+    - 纸箱
+    - 封箱
+    - 泡壳
+    - 吸塑
+    - 说明书
+    - 防潮珠
+    - 贴纸          # stickers
+  qc_testing:
+    - 检测
+    - 测试
+    - 验货
+  admin_other:
+    - 出差          # business trips
+    - 油费          # fuel
+    - 高速费        # tolls
+    - 办公
+    - 空调
+    - 年饭          # company dinner
+    - 午餐
+    - 餐饮
+    - 红酒
+    - 路由器
+    - 维修          # equipment repair
+    - 车间修        # equipment repair (车间修衣车)

@@ -1,0 +1,30 @@
+{
+  "header_map": {
+    "序号": "seq",
+    "日期": "date",
+    "款号": "style_no",
+    "报销事项": "item",
+    "单位": "unit",
+    "数量": "qty",
+    "单价": "unit_price",
+    "金额": "amount",
+    "用途": "purpose",
+    "供应商": "supplier",
+    "备注": "remarks",
+    "批次": "batch"
+  },
+  "header_detect_core": ["序号", "日期", "金额"],
+  "columns": [
+    "line_id", "month", "date", "date_raw", "style_no", "batch", "item",
+    "qty", "unit", "unit_price", "amount", "purpose", "supplier", "remarks",
+    "freight_collect", "source_file", "source_sheet", "row_idx"
+  ],
+  "semantics": {
+    "运费到付": "не колонка и не сумма: значение колонки 报销事项 (позиция 'фрахт при получении'); сумма фрахта — в 金额. freight_collect = булев флаг, True iff '到付' входит в item. Варианты 运费寄付 / 运费到寄付 флагом не помечаются — различимы по тексту item."
+  },
+  "dedup": {
+    "key": ["date±1d", "style_no", "item", "qty", "amount"],
+    "canonical": "xlsx (2026年费用报销明细(6月份).xlsx, лист 5月份)",
+    "rule": "дубль xls дропается, недостающие поля канона дозаполняются из xls"
+  }
+}

@@ -1,0 +1,5 @@
+pandas
+xlrd
+python-calamine
+openpyxl
+pyyaml

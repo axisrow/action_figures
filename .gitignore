@@ -1,0 +1,27 @@
+# Data & artifacts — financial data NEVER enters this repo
+data/
+reports/
+issues/
+dashboard/dist/
+
+# Excel / pickle files (raw data and datasets)
+*.xls
+*.xlsx
+*.pkl
+
+# Exception: SYNTHETIC test fixtures are committed on purpose (never real data)
+!tests/fixtures/*.xls
+!tests/fixtures/*.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

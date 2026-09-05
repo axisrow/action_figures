@@ -1,0 +1,15 @@
+# Абсолютные пути к данным. data/ живёт в ОСНОВНОМ чекауте проекта,
+# чтобы все AO-воркеры в worktree видели одни и те же сырьё/pkl/manifest.
+# data/ целиком gitignored: финансовые сырьё и pkl в репозиторий не попадают.
+# reports/ также gitignored (PR 13, audit).
+data_root: /Users/axisrow/Projects/action_figures/data
+reports_root: /Users/axisrow/Projects/action_figures/reports
+raw_dir: /Users/axisrow/Projects/action_figures/data/raw
+pkl_dir: /Users/axisrow/Projects/action_figures/data/pkl
+zh_pkl_dir: /Users/axisrow/Projects/action_figures/data/pkl/zh
+manifest: /Users/axisrow/Projects/action_figures/data/manifest.json
+# исходники до переноса лежат в корне проекта-оригинала:
+source_dir: /Users/axisrow/Projects/action_figures
+sources:
+  - /Users/axisrow/Projects/action_figures/2026-05-06月费用报销明细.xls
+  - /Users/axisrow/Projects/action_figures/2026年费用报销明细(6月份).xlsx
