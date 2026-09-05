@@ -312,12 +312,32 @@ def _render_overview(d: dict) -> str:
         f'<div class="proof">{_esc(c["proof"])}</div></div>'
         for c in ov["summary"]["top3_optimizations"]
     )
-    fallback = _table(
-        ["Stage", "Total", "Share"],
+    fallback_suppliers = [
         [
-            [_label(r["stage"]), _fmt_cny(r["amount_cny"]), f'{r["share_pct"]:.1f}%']
-            for r in d["cost_structure"][STAGES]
-        ],
+            _esc(r["supplier"]),
+            ", ".join(_label(s) for s in r["stages"]),
+            _fmt_cny(r["total_cny"]),
+            f'{r["share_pct"]:.1f}%',
+        ]
+        for r in ov["sankey"].get("top_suppliers", [])
+    ]
+    fallback = (
+        "<h4>By stage</h4>"
+        + _table(
+            ["Stage", "Total", "Share"],
+            [
+                [
+                    _label(r["stage"]),
+                    _fmt_cny(r["amount_cny"]),
+                    f'{r["share_pct"]:.1f}%',
+                ]
+                for r in d["cost_structure"][STAGES]
+            ],
+        )
+        + "<h4>Top suppliers</h4>"
+        + _table(
+            ["Supplier", "Stages", "Total", "Share"], fallback_suppliers
+        )
     )
     return (
         '<p class="lead">Where the money goes across production stages and '
@@ -326,8 +346,8 @@ def _render_overview(d: dict) -> str:
         + note
         + f'<div class="tiles">{tiles_html}</div>'
         + "<h3>Money flow: spend → stages → suppliers</h3>"
-        + _chart("sankey", 480)
-        + "<details open><summary>Table (no-JS fallback)</summary>"
+        + _chart("sankey", 640)
+        + "<details open><summary>Tables (no-JS fallback)</summary>"
         + fallback
         + "</details>"
         "<h3>Top optimization opportunities</h3>"
@@ -682,13 +702,26 @@ def render_html(data: dict, generated_from: str) -> str:
       }} }};
     }}
 
-    // Overview sankey
+    // Overview sankey: Spend -> stages (colored) -> top suppliers + Others (gray)
     mk('sankey', {{
-      tooltip: {{ trigger: 'item' }},
-      series: [{{ type: 'sankey', left: 10, right: 120, top: 10, bottom: 10,
+      tooltip: {{ trigger: 'item', formatter: function (p) {{
+        return (labelMap[p.name] || p.name) + '<br>¥' + Number(p.value).toLocaleString();
+      }} }},
+      series: [{{ type: 'sankey', left: 10, right: 180, top: 10, bottom: 10,
+        nodeAlign: 'justify', nodeWidth: 14, nodeGap: 8,
         emphasis: {{ focus: 'adjacency' }},
-        label: {{ fontSize: 12 }},
-        data: DATA.overview.sankey.nodes,
+        label: {{ fontSize: 11, overflow: 'truncate', width: 170,
+          formatter: function (p) {{ return labelMap[p.name] || p.name; }} }},
+        lineStyle: {{ color: 'source', opacity: 0.35 }},
+        levels: [{{ depth: 2, itemStyle: {{ color: '#b2bec3' }} }}],
+        data: DATA.overview.sankey.nodes.map(function (n) {{
+          var si = stageNames.indexOf(n.name);
+          if (n.name === 'Spend')
+            return Object.assign({{}}, n, {{ itemStyle: {{ color: '#2d3436' }} }});
+          if (si >= 0)
+            return Object.assign({{}}, n, {{ itemStyle: {{ color: palette[si % palette.length] }} }});
+          return n;  // suppliers + Others stay gray via levels
+        }}),
         links: DATA.overview.sankey.links }}]
     }});
 
@@ -882,7 +915,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if (args.reports / "audit" / "stage_summary.csv").exists():
-        data = build_dashboard_data(args.reports)
+        # supplier translation dict lives next to reports/ in the data home
+        # (gitignored, see config/paths.yaml); optional — raw zh when absent
+        dict_csv = args.reports.parent / "data" / "dict" / "translation.csv"
+        data = build_dashboard_data(
+            args.reports,
+            supplier_translations_path=dict_csv if dict_csv.exists() else None,
+        )
         src = f"reports/ ({args.reports})"
     else:
         data = build_mock_data()

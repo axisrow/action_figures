@@ -28,6 +28,11 @@ supported and auto-detected; when the CSV variant is absent the builder reads:
 - optimization/optimization.md ranked recommendation table + per-rec sections
 - translation/glossary.md     | zh | en | explanation | markdown table
 
+Optional separate input: the supplier translation dict CSV (data/dict/
+translation.csv; columns zh,en,column_hint,n_occurrences,status), passed as
+``supplier_translations_path`` — rows with column_hint=supplier turn sankey
+supplier names into 'English Name (中文原文)'.
+
 All files are optional-ish: a missing file yields empty rows (skeleton phase —
 the dashboard renders on whatever exists). Synthetic tests use the same schema.
 """
@@ -151,6 +156,19 @@ def load_suppliers(path: Path) -> list[dict]:
             entry["n_lines"] += 1
     out = [{**e, "months": sorted(e["months"])} for e in agg.values()]
     return sorted(out, key=lambda r: r["amount_cny"], reverse=True)
+
+
+def load_supplier_translations(path: Path) -> dict[str, str]:
+    """translation dict CSV (zh,en,column_hint,n_occurrences,status) -> {zh: en}.
+
+    Only rows with column_hint == "supplier" and a non-empty en count;
+    everything else falls back to the raw zh name at lookup time.
+    """
+    return {
+        r["zh"].strip(): r["en"].strip()
+        for r in _read_csv(path)
+        if r.get("column_hint", "").strip() == "supplier" and r.get("en", "").strip()
+    }
 
 
 def load_unclassified(path: Path) -> dict:
@@ -408,9 +426,109 @@ def _benchmarks_stages_from_rows(rows: list[dict]) -> list[dict]:
     return list(by_stage.values())
 
 
-def build_dashboard_data(reports_dir: Path) -> dict:
+SANKEY_TOP_N = 10
+
+
+def _supplier_label(zh: str, translations: dict[str, str]) -> str:
+    """Display label 'English Name (中文原文)'; raw zh when untranslated."""
+    en = translations.get(zh)
+    return f"{en} ({zh})" if en else zh
+
+
+def build_sankey(
+    suppliers: list[dict], stages: list[dict], translations: dict[str, str]
+) -> dict:
+    """Overview sankey payload: Spend -> stages -> top-10 suppliers + Others.
+
+    Suppliers outside the top-10 (by total amount) collapse into a single
+    'Others (N suppliers)' node with one aggregated link per stage. Flow
+    invariant: Σ spend→stage links == Σ stage→supplier links == grand total.
+    Nodes are Spend, then stages, then suppliers (all by value, desc); links
+    are sorted by value desc. Also returns ``top_suppliers`` fallback rows
+    (top-10 + Others) with stage mix, totals and share of grand total.
+    """
+    top_rows = suppliers[:SANKEY_TOP_N]
+    tail_rows = suppliers[SANKEY_TOP_N:]
+    label_of = {
+        s["supplier"]: _supplier_label(s["supplier"], translations)
+        for s in suppliers
+    }
+    top_names = {s["supplier"] for s in top_rows}
+    others_name = f"Others ({len(tail_rows)} suppliers)" if tail_rows else None
+
+    nodes = [{"name": "Spend"}]
+    nodes += [{"name": r["stage"]} for r in stages]
+    nodes += [{"name": label_of[s["supplier"]]} for s in top_rows]
+    if others_name:
+        nodes.append({"name": others_name})
+
+    per_stage_top: dict[str, list[tuple[str, float]]] = {}
+    per_stage_others: dict[str, float] = {}
+    for s in suppliers:
+        bucket = per_stage_top if s["supplier"] in top_names else None
+        for stage_name, amount in s["stage_mix"].items():
+            if bucket is None:
+                per_stage_others[stage_name] = (
+                    per_stage_others.get(stage_name, 0.0) + amount
+                )
+            else:
+                bucket.setdefault(stage_name, []).append((s["supplier"], amount))
+
+    links = [
+        {"source": "Spend", "target": r["stage"], "value": r["amount_cny"]}
+        for r in stages
+    ]
+    links += [
+        {"source": stage_name, "target": label_of[supplier], "value": amount}
+        for stage_name, pairs in per_stage_top.items()
+        for supplier, amount in pairs
+    ]
+    if others_name:
+        links += [
+            {"source": stage_name, "target": others_name, "value": amount}
+            for stage_name, amount in per_stage_others.items()
+        ]
+    links.sort(key=lambda ln: ln["value"], reverse=True)
+
+    total = sum(r["amount_cny"] for r in stages)
+    fallback_rows = [
+        {
+            "supplier": label_of[s["supplier"]],
+            "stages": sorted(
+                s["stage_mix"], key=lambda st: s["stage_mix"][st], reverse=True
+            ),
+            "total_cny": s["amount_cny"],
+            "share_pct": round(s["amount_cny"] / total * 100, 1) if total else 0.0,
+        }
+        for s in top_rows
+    ]
+    if others_name:
+        others_total = sum(per_stage_others.values())
+        fallback_rows.append(
+            {
+                "supplier": others_name,
+                "stages": sorted(
+                    per_stage_others,
+                    key=lambda st: per_stage_others[st],
+                    reverse=True,
+                ),
+                "total_cny": others_total,
+                "share_pct": round(others_total / total * 100, 1) if total else 0.0,
+            }
+        )
+    return {"nodes": nodes, "links": links, "top_suppliers": fallback_rows}
+
+
+def build_dashboard_data(
+    reports_dir: Path, supplier_translations_path: Path | None = None
+) -> dict:
     """One JSON-safe dict consumed by build_dashboard.render_html()."""
     reports_dir = Path(reports_dir)
+    translations = (
+        load_supplier_translations(supplier_translations_path)
+        if supplier_translations_path
+        else {}
+    )
     stages = load_stage_summary(reports_dir / "audit" / "stage_summary.csv")
     by_month = load_by_month_stage(reports_dir / "audit" / "by_month_stage.csv")
     by_style = load_by_style_stage(reports_dir / "audit" / "by_style_stage.csv")
@@ -471,21 +589,8 @@ def build_dashboard_data(reports_dir: Path) -> dict:
     gantt_truncated = len(gantt) > 25
     gantt = gantt[:25]
 
-    # sankey: Spend -> stage -> supplier
-    supplier_stage: dict[tuple[str, str], float] = {}
-    for s in suppliers:
-        for stage_name, amount in s["stage_mix"].items():
-            key = (s["supplier"], stage_name)
-            supplier_stage[key] = supplier_stage.get(key, 0.0) + amount
-    nodes = [{"name": "Spend"}]
-    nodes += [{"name": s} for s in stage_names]
-    nodes += [{"name": s["supplier"]} for s in suppliers]
-    links = [{"source": "Spend", "target": r["stage"], "value": r["amount_cny"]}
-             for r in stages]
-    links += [
-        {"source": stage, "target": supplier, "value": value}
-        for (supplier, stage), value in supplier_stage.items()
-    ]
+    # sankey: Spend -> stage -> supplier (top-10 + Others, EN labels when known)
+    sankey = build_sankey(suppliers, stages, translations)
 
     # executive summary: the main takeaways in plain English, one screen
     top3_cards = sorted(opt["cards"], key=lambda c: c["saving_cny"],
@@ -544,7 +649,7 @@ def build_dashboard_data(reports_dir: Path) -> dict:
             },
             "unclassified": unclassified,
             "executive": executive,
-            "sankey": {"nodes": nodes, "links": links},
+            "sankey": sankey,
         },
         "cost_structure": {
             "stages": stages,

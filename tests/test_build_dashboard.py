@@ -34,6 +34,7 @@ def test_mock_data_matches_real_schema(mock_data):
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
+    assert len(mock_data["overview"]["sankey"]["top_suppliers"]) <= 11  # top-10 + Others
     assert len(mock_data["suppliers"]["top"]) == 10
     assert mock_data["timelines"]["gantt"][0]["total_days"] >= \
         mock_data["timelines"]["gantt"][-1]["total_days"]
@@ -50,7 +51,7 @@ def test_html_has_seven_tabs_and_fallback_tables(html):
     for tab_id in ["overview", "cost", "timelines", "suppliers",
                    "benchmarks", "optimizations", "glossary"]:
         assert f'id="{tab_id}"' in html
-    assert html.count("<table") >= 6  # no-JS fallbacks for every data tab
+    assert html.count("<table") >= 7  # no-JS fallbacks + Top suppliers (overview)
     assert 'id="sup-search"' in html  # client-side supplier search
     assert "echarts" in html  # CDN charts
 
