@@ -194,7 +194,7 @@ def build_mock_data() -> dict:
 # ---------------------------------------------------------------------------
 
 STAGES = "stages"
-CDN = "https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.1/echarts.min.js"
+CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
 
 STAGE_COLORS = {
     "tooling_molds": "#6c5ce7",
@@ -260,9 +260,10 @@ def _table(headers: list[str], rows: list[list[str]], cls: str = "fallback") -> 
     return f'<table class="{cls}"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
 
 
-def _section(tab_id: str, title: str, body: str) -> str:
+def _section(tab_id: str, title: str, body: str, active: bool = False) -> str:
+    cls = "tab-panel active" if active else "tab-panel"
     return (
-        f'<section id="{tab_id}" class="tab-panel" role="tabpanel">'
+        f'<section id="{tab_id}" class="{cls}" role="tabpanel">'
         f"<h2>{title}</h2>{body}</section>"
     )
 
@@ -279,6 +280,7 @@ def _chart(id_: str, height: int = 420) -> str:
 def _render_overview(d: dict) -> str:
     ov = d["overview"]
     tiles = ov["tiles"]
+    ex = ov.get("executive") or {}
     tiles_html = "".join(
         f'<div class="tile"><div class="tile-num">{val}</div>'
         f"<div class=\"tile-label\">{label}</div></div>"
@@ -289,6 +291,21 @@ def _render_overview(d: dict) -> str:
             ("Top stage", _label(tiles["top_stage"])),
         ]
     )
+    exec_html = ""
+    if ex.get("bullets"):
+        items = "".join(f"<li>{_esc(b)}</li>" for b in ex["bullets"])
+        exec_html = (
+            "<h3>Executive summary — the main takeaways</h3>"
+            f'<ul class="exec">{items}</ul>'
+        )
+    uncls = ov.get("unclassified") or {}
+    note = ""
+    if uncls.get("n_lines"):
+        note = (
+            f'<p class="lead">Data quality: {uncls["n_lines"]} expense lines '
+            f"({_fmt_cny(uncls['amount_cny'])}) could not be classified into "
+            "a production stage — see the audit report.</p>"
+        )
     cards = "".join(
         f'<div class="opt-card"><h4>{_esc(c["title"])}</h4>'
         f'<div class="saving">saves ~{_fmt_cny(c["saving_cny"])}</div>'
@@ -304,9 +321,11 @@ def _render_overview(d: dict) -> str:
     )
     return (
         '<p class="lead">Where the money goes across production stages and '
-        "suppliers, January–June 2026. All amounts in CNY (¥).</p>"
-        f'<div class="tiles">{tiles_html}</div>'
-        "<h3>Money flow: spend → stages → suppliers</h3>"
+        "suppliers. All amounts in CNY (¥).</p>"
+        + exec_html
+        + note
+        + f'<div class="tiles">{tiles_html}</div>'
+        + "<h3>Money flow: spend → stages → suppliers</h3>"
         + _chart("sankey", 480)
         + "<details open><summary>Table (no-JS fallback)</summary>"
         + fallback
@@ -363,9 +382,16 @@ def _render_timelines(d: dict) -> str:
             for s in g["stages"]
         )
         rows.append([g["style_no"], str(g["total_days"]), stages])
+    note = ""
+    if d["timelines"].get("gantt_truncated"):
+        note = (
+            '<p class="lead">Showing the 25 longest cycles; shorter styles are '
+            "in the audit CSVs.</p>"
+        )
     return (
         "<p>Stage bars per style, drawn from payment dates; styles sorted by "
         "total span (longest first).</p>"
+        + note
         + _chart("gantt", max(360, 60 * len(d["timelines"]["gantt"])))
         + "<details open><summary>Table (no-JS fallback)</summary>"
         + _table(["Style", "Span (days)", "Stages"], rows)
@@ -422,51 +448,108 @@ def _render_suppliers(d: dict) -> str:
 
 
 def _render_benchmarks(d: dict) -> str:
-    rows = [
-        [
-            _label(r["stage"]),
-            _esc(r["metric"]),
-            f'{r["our_value"]:,.1f}',
-            f'{r["market_low"]:,.1f} – {r["market_high"]:,.1f}',
-            _esc(r["unit"]),
-            f'<a href="{_esc(r["source_url"])}" target="_blank" '
-            f'rel="noopener">{_esc(r["source_title"])}</a> ({_esc(r["accessed_on"])})',
-            ("within market" if r["market_low"] <= r["our_value"] <= r["market_high"]
-             else ("above market" if r["our_value"] > r["market_high"] else "below market")),
-        ]
-        for r in d["benchmarks"]["rows"]
+    bm = d["benchmarks"]
+    parts = [
+        "<p>Market price ranges and lead times for every production stage, "
+        "gathered from public sources (every source opened and verified "
+        "2026-09-05). Each card lists the key ranges and their sources.</p>"
     ]
-    return (
-        "<p>Our numbers vs market ranges gathered from public sources. "
-        "Every range links to its source.</p>"
-        + _chart("bench", 360)
-        + _table(
-            ["Stage", "Metric", "Ours", "Market range", "Unit", "Source", "Verdict"],
-            rows,
+    if bm["rows"]:
+        rows = [
+            [
+                _label(r["stage"]),
+                _esc(r["metric"]),
+                f'{r["our_value"]:,.1f}',
+                f'{r["market_low"]:,.1f} – {r["market_high"]:,.1f}',
+                _esc(r["unit"]),
+                f'<a href="{_esc(r["source_url"])}" target="_blank" '
+                f'rel="noopener">{_esc(r["source_title"])}</a> '
+                f'({_esc(r["accessed_on"])})',
+                ("within market"
+                 if r["market_low"] <= r["our_value"] <= r["market_high"]
+                 else ("above market" if r["our_value"] > r["market_high"]
+                       else "below market")),
+            ]
+            for r in bm["rows"]
+        ]
+        parts += [
+            _chart("bench", 360),
+            _table(["Stage", "Metric", "Ours", "Market range", "Unit", "Source",
+                    "Verdict"], rows),
+        ]
+    cards = []
+    for s in bm["stages"]:
+        highs = "".join(f"<li>{_esc(h)}</li>" for h in s["highlights"])
+        srcs = " · ".join(
+            f'<a href="{_esc(src["url"])}" target="_blank" '
+            f'rel="noopener">{_esc(src["title"])}</a>'
+            for src in s["sources"]
         )
-    )
+        cards.append(
+            f'<div class="bench-card"><h4>{_esc(s["title"])}</h4>'
+            f'<p class="lead">{_esc(s["intro"])}</p>'
+            + (f"<ul>{highs}</ul>" if highs else "")
+            + (f'<div class="srcs">{srcs}</div>' if srcs else "")
+            + "</div>"
+        )
+    if cards:
+        parts.append('<div class="cards">' + "".join(cards) + "</div>")
+
+    comp = d["optimizations"].get("market_comparison") or []
+    if comp:
+        parts.append("<h3>Our stage shares vs the market</h3>")
+        parts.append(_table(
+            ["Stage", "Our share", "H1-2026 spend", "Market reference"],
+            [
+                [_label(r["stage"]), f'{r["our_share_pct"]:.1f}%',
+                 _fmt_cny(r["h1_2026_cny"]), _esc(r["market_ref"])]
+                for r in comp
+            ],
+        ))
+    return "".join(parts)
 
 
 def _render_optimizations(d: dict) -> str:
     cards = "".join(
         f'<div class="opt-card"><h4>#{_esc(c["id"])} {_esc(c["title"])}</h4>'
-        f'<div class="base">baseline {_fmt_cny(c["baseline_cny"])} '
-        f'({_label(c["stage"])})</div>'
-        f'<div class="saving">estimated saving ~{_fmt_cny(c["saving_cny"])}</div>'
-        f'<div class="proof">{_esc(c["proof"])}</div></div>'
+        + (f'<div class="base">baseline {_fmt_cny(c["baseline_cny"])} '
+           f'({_label(c["stage"])})</div>'
+           if c.get("baseline_cny") else "")
+        + (f'<div class="base">{_esc(c["baseline"])}</div>'
+           if c.get("baseline") else "")
+        + f'<div class="saving">estimated saving ~{_fmt_cny(c["saving_cny"])}'
+        + (f' / 6 months (probability {c["prob"]:.0%}, effort {c["effort"]}, '
+           f'saves {c["time_saved"]})' if c.get("prob") is not None else "")
+        + "</div>"
+        + (f'<div class="proof">{_esc(c["market_range"])}</div>'
+           if c.get("market_range") else "")
+        + (f'<div class="proof">{_esc(c["math"])}</div>' if c.get("math") else "")
+        + (f'<div class="proof">{_esc(c["proof"])}</div>' if c.get("proof") else "")
+        + "</div>"
         for c in d["optimizations"]["cards"]
     )
     rows = [
-        [c["id"], c["title"], _label(c["stage"]),
-         _fmt_cny(c["baseline_cny"]), _fmt_cny(c["saving_cny"]), c["proof"]]
+        [c["id"], _esc(c["title"]),
+         _label(c["stage"]) if c.get("stage") else "",
+         _fmt_cny(c["baseline_cny"]) if c.get("baseline_cny") else "",
+         _fmt_cny(c["saving_cny"]),
+         c.get("prob", ""), c.get("effort", ""), c.get("time_saved", "")]
         for c in d["optimizations"]["cards"]
     ]
+    insights = d["optimizations"].get("insights") or []
+    ins_html = ""
+    if insights:
+        ins_html = ("<h3>Why these, in plain words</h3><ul>"
+                    + "".join(f"<li>{_esc(i)}</li>" for i in insights)
+                    + "</ul>")
     return (
-        "<p>Concrete saving opportunities, ordered by estimated impact. "
-        "Each card shows the baseline cost, the saving estimate and the "
-        "supporting evidence.</p>"
+        "<p>Concrete saving opportunities, ranked by score "
+        "(saving × probability ÷ effort). Each card shows the baseline cost, "
+        "the saving estimate and the supporting evidence.</p>"
         f'<div class="cards">{cards}</div>'
-        + _table(["#", "Title", "Stage", "Baseline", "Saving", "Proof"], rows)
+        + ins_html
+        + _table(["#", "Recommendation", "Stage", "Baseline", "Saving (6-mo)",
+                  "Prob.", "Effort", "Time saved"], rows)
     )
 
 
@@ -507,10 +590,15 @@ main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; }
 .tab-panel.active { display: block; }
 h2 { margin: 8px 0 12px; } h3 { margin: 22px 0 8px; }
 .lead { color: #636e72; }
+.exec { background: #fff; border-left: 4px solid #6c5ce7; border-radius: 8px;
+        padding: 14px 20px; margin: 10px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.exec li { margin: 6px 0; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
          gap: 12px; margin: 14px 0; }
-.tile, .opt-card, .sup-card { background: #fff; border-radius: 10px; padding: 14px 16px;
+.tile, .opt-card, .sup-card, .bench-card { background: #fff; border-radius: 10px; padding: 14px 16px;
          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.bench-card ul { margin: 6px 0; padding-left: 20px; }
+.bench-card .srcs { font-size: 12px; color: #0984e3; margin-top: 8px; }
 .tile-num { font-size: 24px; font-weight: 700; }
 .tile-label { color: #636e72; font-size: 12px; text-transform: uppercase;
               letter-spacing: .04em; }
@@ -538,7 +626,12 @@ def render_html(data: dict, generated_from: str) -> str:
     payload = json.dumps(data, ensure_ascii=False)
     payload = payload.replace("<", "\\u003c")  # safe inside <script>
     palette = _stage_palette(data["cost_structure"]["heatmap"]["stages"])
-    tabs_html = "".join(_section(tid, title, fn(data)) for tid, title, fn in TABS)
+    months = data["cost_structure"]["months"]
+    period = f"{months[0]}…{months[-1]}" if months else ""
+    tabs_html = "".join(
+        _section(tid, title, fn(data), active=(i == 0))
+        for i, (tid, title, fn) in enumerate(TABS)
+    )
     nav_html = "".join(
         f'<button role="tab" data-tab="{tid}" '
         f'{"active" if i == 0 else ""}>{title}</button>'
@@ -555,7 +648,7 @@ def render_html(data: dict, generated_from: str) -> str:
 <body>
 <header>
   <h1>Action Figures — Production Cost Dashboard</h1>
-  <div class="sub">Data source: {generated_from} · Jan–Jun 2026 · all amounts in CNY</div>
+  <div class="sub">Data source: {generated_from} · {period} · all amounts in CNY</div>
   <nav id="tabs">{nav_html}</nav>
 </header>
 <main>
@@ -689,9 +782,9 @@ def render_html(data: dict, generated_from: str) -> str:
       }})
     }});
 
-    // Benchmarks: ours vs market range
-    var bm = DATA.benchmarks.rows;
-    mk('bench', {{
+    // Benchmarks: ours vs market range (only when CSV rows exist)
+    var bm = DATA.benchmarks.rows || [];
+    if (bm.length) mk('bench', {{
       tooltip: {{ trigger: 'axis' }},
       grid: {{ left: 70, bottom: 90 }},
       xAxis: {{ type: 'category',

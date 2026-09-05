@@ -16,6 +16,18 @@ Expected CSV layout under ``reports_dir`` (headers are the contract):
 - optimization/optimizations.csv id,title,stage,baseline_cny,saving_cny,proof
 - translation/glossary.csv    zh,en,explanation
 
+REAL report formats (what the finished report steps actually write) are also
+supported and auto-detected; when the CSV variant is absent the builder reads:
+
+- audit/by_month_stage.csv    month,stage,n_lines,amount_cny
+- audit/by_style_timeline.csv style_no,stage,start_date,end_date,n_lines,amount_cny
+- audit/by_supplier_stage.csv supplier,stage,amount_cny,n_lines,months_active
+                              (pre-aggregated; months_active is a ";"-joined list)
+- audit/unclassified.csv      line_id,month,date,style_no,item,purpose,supplier,amount
+- benchmarks/<stage>.md       per-stage markdown with bold ranges + source links
+- optimization/optimization.md ranked recommendation table + per-rec sections
+- translation/glossary.md     | zh | en | explanation | markdown table
+
 All files are optional-ish: a missing file yields empty rows (skeleton phase —
 the dashboard renders on whatever exists). Synthetic tests use the same schema.
 """
@@ -23,6 +35,7 @@ the dashboard renders on whatever exists). Synthetic tests use the same schema.
 from __future__ import annotations
 
 import csv
+import re
 from datetime import date
 from pathlib import Path
 
@@ -36,6 +49,19 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 def _f(value: str) -> float:
     return float(value)
+
+
+def _money(value: str) -> float:
+    """'8,900' / '**3,100**' / '19.0%' -> float (commas, bold, % stripped)."""
+    return float(re.sub(r"[,:%*]", "", value.strip()))
+
+
+def _norm_style(value: str) -> str:
+    """'9052.0' -> '9052' (float-string style numbers from the audit)."""
+    s = (value or "").strip().strip('"')
+    if s.endswith(".0") and s[:-2].isdigit():
+        return s[:-2]
+    return s
 
 
 def _d(start: str, end: str) -> int:
@@ -69,7 +95,11 @@ def load_by_month_stage(path: Path) -> list[dict]:
 
 def load_by_style_stage(path: Path) -> list[dict]:
     return [
-        {"style_no": r["style_no"], "stage": r["stage"], "amount_cny": _f(r["amount_cny"])}
+        {
+            "style_no": _norm_style(r["style_no"]),
+            "stage": r["stage"],
+            "amount_cny": _f(r["amount_cny"]),
+        }
         for r in _read_csv(path)
     ]
 
@@ -77,7 +107,7 @@ def load_by_style_stage(path: Path) -> list[dict]:
 def load_by_style_timeline(path: Path) -> list[dict]:
     rows = [
         {
-            "style_no": r["style_no"],
+            "style_no": _norm_style(r["style_no"]),
             "stage": r["stage"],
             "start_date": r["start_date"],
             "end_date": r["end_date"],
@@ -89,23 +119,47 @@ def load_by_style_timeline(path: Path) -> list[dict]:
 
 
 def load_suppliers(path: Path) -> list[dict]:
-    """Aggregate by_supplier_stage.csv: totals, stage mix, months; total desc."""
+    """by_supplier_stage.csv in either format; totals + stage mix + months, desc.
+
+    Legacy per-month:  supplier,stage,month,amount_cny
+    Real aggregated:   supplier,stage,amount_cny,n_lines,months_active
+    (blank supplier names become "(unknown)").
+    """
+    rows = _read_csv(path)
     agg: dict[str, dict] = {}
-    for r in _read_csv(path):
-        name = r["supplier"]
+    aggregated = bool(rows) and "months_active" in rows[0]
+    for r in rows:
+        name = r["supplier"].strip() or "(unknown)"
         entry = agg.setdefault(
-            name, {"supplier": name, "amount_cny": 0.0, "stage_mix": {}, "months": set()}
+            name,
+            {
+                "supplier": name,
+                "amount_cny": 0.0,
+                "stage_mix": {},
+                "months": set(),
+                "n_lines": 0,
+            },
         )
         amount = _f(r["amount_cny"])
         entry["amount_cny"] += amount
         entry["stage_mix"][r["stage"]] = entry["stage_mix"].get(r["stage"], 0.0) + amount
-        if r.get("month"):
+        if aggregated:
+            entry["months"].update(m for m in r["months_active"].split(";") if m)
+            entry["n_lines"] += int(r["n_lines"])
+        else:
             entry["months"].add(r["month"])
-    rows = [
-        {**e, "months": sorted(e["months"])}
-        for e in agg.values()
-    ]
-    return sorted(rows, key=lambda r: r["amount_cny"], reverse=True)
+            entry["n_lines"] += 1
+    out = [{**e, "months": sorted(e["months"])} for e in agg.values()]
+    return sorted(out, key=lambda r: r["amount_cny"], reverse=True)
+
+
+def load_unclassified(path: Path) -> dict:
+    """audit/unclassified.csv -> line count + total amount (data-quality note)."""
+    rows = _read_csv(path)
+    return {
+        "n_lines": len(rows),
+        "amount_cny": sum(_f(r["amount"]) for r in rows),
+    }
 
 
 def load_benchmarks(path: Path) -> list[dict]:
@@ -148,7 +202,210 @@ def load_glossary(path: Path) -> list[dict]:
     ]
 
 
+# --- markdown loaders (real report formats) ---------------------------------
+
+_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+_BARE_URL_ITEM_RE = re.compile(r"^\d+\.\s+(https?://\S+)\s+—\s+(.+?)\s*$", re.M)
+_BOLD_RANGE_RE = re.compile(r"\*\*([^*]*\d[^*]*)\*\*")
+
+
+def _strip_md(text: str) -> str:
+    """Plain text from a markdown fragment: drop bold/code, links -> title."""
+    out = _LINK_RE.sub(lambda m: m.group(1), text)
+    out = out.replace("**", "").replace("`", "").replace("*", "")
+    return out.strip().lstrip("- ").strip()
+
+
+def load_benchmarks_md(benchmarks_dir: Path) -> list[dict]:
+    """benchmarks/<stage>.md -> one card per stage.
+
+    Card = {stage, title, intro, highlights, sources}:
+    - title from the H1 (after 'Benchmark: ', parenthetical suffix dropped)
+    - intro = paragraphs before the first '## ' heading (plain text)
+    - highlights = lines carrying a bold numeric range ('**$1,000–5,000**'),
+      markdown-stripped, capped at 12 per stage
+    - sources = all http(s) links (title, url), deduped by url, first-seen
+      order; bare 'N. url — description' list items also count
+    """
+    benchmarks_dir = Path(benchmarks_dir)
+    if not benchmarks_dir.is_dir():
+        return []
+    cards = []
+    for path in sorted(benchmarks_dir.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+
+        m = re.match(r"#\s+Benchmark:\s*(.+)", lines[0] if lines else "")
+        title = re.sub(r"\s*[(（].*$", "", m.group(1)).strip() if m else path.stem
+
+        intro_lines: list[str] = []
+        for line in lines[1:]:
+            if line.startswith("##"):
+                break
+            if line.strip() and not line.startswith("#"):
+                intro_lines.append(_strip_md(line))
+        intro = " ".join(intro_lines)
+
+        highlights = []
+        for line in lines:
+            s = line.strip()
+            if not s or s.startswith(("#", "|", ">")):
+                continue
+            if _BOLD_RANGE_RE.search(s):
+                highlights.append(_strip_md(s))
+        highlights = highlights[:12]
+
+        sources: list[dict] = []
+        seen: set[str] = set()
+        pairs = [(t, u) for t, u in _LINK_RE.findall(text)]
+        pairs += [(desc.strip(), u) for u, desc in _BARE_URL_ITEM_RE.findall(text)]
+        for title_text, url in pairs:
+            if url not in seen:
+                seen.add(url)
+                sources.append({"title": title_text.strip(), "url": url})
+
+        cards.append(
+            {
+                "stage": path.stem,
+                "title": title,
+                "intro": intro,
+                "highlights": highlights,
+                "sources": sources,
+            }
+        )
+    return cards
+
+
+def _md_table_rows(text: str, header_keyword: str) -> list[list[str]]:
+    """Rows (as raw cell strings) of the first markdown table whose header
+    line contains header_keyword."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("|") and header_keyword in line:
+            rows = []
+            for row in lines[i + 1:]:
+                if not row.startswith("|"):
+                    break
+                cells = [c.strip() for c in row.strip().strip("|").split("|")]
+                if all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
+                    continue  # alignment separator
+                rows.append(cells)
+            return rows
+    return []
+
+
+def load_optimizations_md(path: Path) -> dict:
+    """optimization/optimization.md -> {cards, market_comparison, insights}.
+
+    - cards: ranked table ('Recommendation' header) + the matching '### N)'
+      sections' Our baseline / Market range / Savings math paragraphs
+    - market_comparison: the stage-share table ('Our share' header)
+    - insights: numbered bold deviation items + the '**Reading:**' verdict
+    """
+    if not path.exists():
+        return {"cards": [], "market_comparison": [], "insights": []}
+    text = path.read_text(encoding="utf-8")
+
+    # ranked recommendations table
+    table = _md_table_rows(text, "Recommendation")
+    cards = []
+    for cells in table:
+        if len(cells) < 7:
+            continue
+        cards.append(
+            {
+                "id": cells[0],
+                "title": _strip_md(cells[1]),
+                "saving_cny": _money(cells[2]),
+                "prob": _money(cells[3]),
+                "score": _money(cells[4]),
+                "time_saved": cells[5],
+                "effort": cells[6],
+                "baseline": "",
+                "market_range": "",
+                "math": "",
+            }
+        )
+
+    # per-recommendation sections: '### N) Title ... **Label:** text'
+    sections = re.split(r"^###\s+\d+\)\s+", text, flags=re.M)[1:]
+    label_re = re.compile(
+        r"\*\*(?:Our baseline|Market range|Savings math):\*\*\s*(.+)"
+    )
+    field_of = {"Our baseline": "baseline", "Market range": "market_range",
+                "Savings math": "math"}
+    for section in sections:
+        first_line = section.splitlines()[0]
+        fields = {}
+        for m in label_re.finditer(section):
+            for label, field in field_of.items():
+                if m.group(0).startswith(f"**{label}:**"):
+                    fields[field] = _strip_md(m.group(1))
+        for card in cards:
+            if card["title"].lower() in first_line.lower():
+                card.update(fields)
+                break
+
+    # stage shares vs market table
+    market_comparison = [
+        {
+            "stage": cells[0],
+            "our_share_pct": _money(cells[1]),
+            "h1_2026_cny": _money(cells[2]),
+            "market_ref": _strip_md(cells[3]) if len(cells) > 3 else "",
+        }
+        for cells in _md_table_rows(text, "Our share")
+        if len(cells) >= 3
+    ]
+
+    # plain-English insights: Reading verdict + numbered bold deviations
+    insights = []
+    for m in re.finditer(r"\*\*Reading:\*\*\s*(.+)", text):
+        insights.append(_strip_md(m.group(1)))
+    tail = text.split("are our candidates", 1)
+    if len(tail) == 2:
+        for m in re.finditer(r"^\d+\.\s+\*\*(.+?)\*\*(.+)$", tail[1], flags=re.M):
+            insights.append(_strip_md(f"{m.group(1)}{m.group(2)}"))
+
+    return {
+        "cards": cards,
+        "market_comparison": market_comparison,
+        "insights": insights,
+    }
+
+
+def load_glossary_md(path: Path) -> list[dict]:
+    """translation/glossary.md '| zh | en | explanation |' table."""
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    return [
+        {"zh": cells[0], "en": cells[1], "explanation": cells[2]}
+        for cells in _md_table_rows(text, "zh")
+        if len(cells) >= 3
+    ]
+
+
 # --- aggregate -----------------------------------------------------------
+
+
+def _benchmarks_stages_from_rows(rows: list[dict]) -> list[dict]:
+    """Derive per-stage benchmark cards from the legacy CSV rows (mock path)."""
+    by_stage: dict[str, dict] = {}
+    for r in rows:
+        card = by_stage.setdefault(
+            r["stage"],
+            {"stage": r["stage"], "title": r["stage"], "intro": "",
+             "highlights": [], "sources": []},
+        )
+        card["highlights"].append(
+            f"{r['metric']}: ours {r['our_value']:,.1f} vs market "
+            f"{r['market_low']:,.1f}–{r['market_high']:,.1f} {r['unit']}"
+        )
+        card["sources"].append(
+            {"title": r["source_title"], "url": r["source_url"]}
+        )
+    return list(by_stage.values())
 
 
 def build_dashboard_data(reports_dir: Path) -> dict:
@@ -159,11 +416,30 @@ def build_dashboard_data(reports_dir: Path) -> dict:
     by_style = load_by_style_stage(reports_dir / "audit" / "by_style_stage.csv")
     timeline = load_by_style_timeline(reports_dir / "audit" / "by_style_timeline.csv")
     suppliers = load_suppliers(reports_dir / "audit" / "by_supplier_stage.csv")
-    benchmarks = load_benchmarks(reports_dir / "benchmarks" / "benchmarks.csv")
-    optimizations = load_optimizations(
-        reports_dir / "optimization" / "optimizations.csv"
+    unclassified = load_unclassified(reports_dir / "audit" / "unclassified.csv")
+
+    bench_csv = reports_dir / "benchmarks" / "benchmarks.csv"
+    if bench_csv.exists():
+        bench_rows = load_benchmarks(bench_csv)
+        bench_stages = _benchmarks_stages_from_rows(bench_rows)
+    else:
+        bench_rows = []
+        bench_stages = load_benchmarks_md(reports_dir / "benchmarks")
+
+    opt_csv = reports_dir / "optimization" / "optimizations.csv"
+    if opt_csv.exists():
+        opt_cards = load_optimizations(opt_csv)
+        opt = {"cards": opt_cards, "market_comparison": [], "insights": []}
+    else:
+        opt = load_optimizations_md(
+            reports_dir / "optimization" / "optimization.md"
+        )
+
+    gloss_csv = reports_dir / "translation" / "glossary.csv"
+    glossary = (
+        load_glossary(gloss_csv) if gloss_csv.exists()
+        else load_glossary_md(reports_dir / "translation" / "glossary.md")
     )
-    glossary = load_glossary(reports_dir / "translation" / "glossary.csv")
 
     total_spend = sum(r["amount_cny"] for r in stages)
     months = sorted({r["month"] for r in by_month})
@@ -191,14 +467,16 @@ def build_dashboard_data(reports_dir: Path) -> dict:
         }
         for style_no, stages_rows in per_style.items()
     ]
-    gantt = sorted(gantt, key=lambda g: g["total_days"], reverse=True)
+    gantt.sort(key=lambda g: g["total_days"], reverse=True)
+    gantt_truncated = len(gantt) > 25
+    gantt = gantt[:25]
 
     # sankey: Spend -> stage -> supplier
     supplier_stage: dict[tuple[str, str], float] = {}
-    supplier_rows = _read_csv(reports_dir / "audit" / "by_supplier_stage.csv")
-    for r in supplier_rows:
-        key = (r["supplier"], r["stage"])
-        supplier_stage[key] = supplier_stage.get(key, 0.0) + _f(r["amount_cny"])
+    for s in suppliers:
+        for stage_name, amount in s["stage_mix"].items():
+            key = (s["supplier"], stage_name)
+            supplier_stage[key] = supplier_stage.get(key, 0.0) + amount
     nodes = [{"name": "Spend"}]
     nodes += [{"name": s} for s in stage_names]
     nodes += [{"name": s["supplier"]} for s in suppliers]
@@ -209,10 +487,47 @@ def build_dashboard_data(reports_dir: Path) -> dict:
         for (supplier, stage), value in supplier_stage.items()
     ]
 
+    # executive summary: the main takeaways in plain English, one screen
+    top3_cards = sorted(opt["cards"], key=lambda c: c["saving_cny"],
+                        reverse=True)[:3]
     top3 = [
-        {"title": c["title"], "saving_cny": c["saving_cny"], "proof": c["proof"]}
-        for c in optimizations[:3]
+        {"title": c["title"], "saving_cny": c["saving_cny"],
+         "proof": c.get("math") or c.get("proof", "")}
+        for c in top3_cards
     ]
+    top3_savings = sum(c["saving_cny"] for c in top3)
+    bullets = []
+    if months:
+        bullets.append(
+            f"Total spend ¥{total_spend:,.0f} over {months[0]}…{months[-1]} "
+            f"({len(months)} months), {sum(r['n_lines'] for r in stages)} "
+            f"expense lines, {len(styles)} styles."
+        )
+    if stages:
+        top3_stages_txt = ", ".join(
+            f"{r['stage'].replace('_', ' ')} {r['share_pct']:.0f}%"
+            for r in stages[:3]
+        )
+        bullets.append(f"Biggest cost stages: {top3_stages_txt}.")
+    if top3:
+        titles = "; ".join(c["title"] for c in top3)
+        bullets.append(
+            f"Top 3 saving opportunities add up to ~¥{top3_savings:,.0f} per "
+            f"6 months: {titles}."
+        )
+    bullets.extend(opt["insights"][:4])
+    executive = {
+        "bullets": bullets,
+        "total_spend_cny": total_spend,
+        "months_range": [months[0], months[-1]] if months else [],
+        "top3_stages": [
+            {"stage": r["stage"], "share_pct": r["share_pct"],
+             "amount_cny": r["amount_cny"]}
+            for r in stages[:3]
+        ],
+        "top3_optimizations": top3,
+        "top3_savings_cny": top3_savings,
+    }
 
     return {
         "overview": {
@@ -227,6 +542,8 @@ def build_dashboard_data(reports_dir: Path) -> dict:
                 "num_styles": len(styles),
                 "top_stage": stages[0]["stage"] if stages else "",
             },
+            "unclassified": unclassified,
+            "executive": executive,
             "sankey": {"nodes": nodes, "links": links},
         },
         "cost_structure": {
@@ -235,9 +552,9 @@ def build_dashboard_data(reports_dir: Path) -> dict:
             "months": months,
             "heatmap": {"months": months, "stages": stage_names, "cells": cells},
         },
-        "timelines": {"gantt": gantt},
+        "timelines": {"gantt": gantt, "gantt_truncated": gantt_truncated},
         "suppliers": {"all": suppliers, "top": suppliers[:10]},
-        "benchmarks": {"rows": benchmarks},
-        "optimizations": {"cards": optimizations},
+        "benchmarks": {"rows": bench_rows, "stages": bench_stages},
+        "optimizations": opt,
         "glossary": {"rows": glossary},
     }

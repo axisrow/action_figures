@@ -55,6 +55,21 @@ def test_html_has_seven_tabs_and_fallback_tables(html):
     assert "echarts" in html  # CDN charts
 
 
+def test_first_tab_visible_without_js(html):
+    # the overview panel must ship with the active class, or the whole
+    # page is blank until the first click (regression)
+    assert 'id="overview" class="tab-panel active"' in html
+    assert html.count('class="tab-panel active"') == 1
+
+
+def test_echarts_cdn_url_is_pinned_and_valid(html):
+    # cdnjs never had 5.5.1 (404) — the pinned URL must be one that exists
+    import re
+
+    urls = set(re.findall(r'<script src="(https://[^"]+)"', html))
+    assert urls == {"https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"}
+
+
 def test_main_writes_dist_index(tmp_path, monkeypatch):
     out = tmp_path / "dist" / "index.html"
     rc = bd.main(["--reports", str(tmp_path / "missing_reports"), "--out", str(out)])

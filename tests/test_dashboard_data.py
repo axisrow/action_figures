@@ -147,19 +147,20 @@ def test_suppliers_aggregate_stage_mix_and_months(reports_dir):
 
 
 def test_suppliers_without_month_column(tmp_path):
-    """Real by_supplier_stage.csv has no `month` column (schema of #13 audit)."""
+    """Real by_supplier_stage.csv has no `month` column; months_active is a
+    ";"-joined list of YYYY-MM months (PR 19 export format)."""
     path = write(
         tmp_path / "by_supplier_stage.csv",
         "supplier,stage,amount_cny,n_lines,months_active",
         [
-            "SupA,tooling_molds,6000.00,4,2",
-            "SupB,painting_printing,3000.00,3,1",
+            "SupA,tooling_molds,6000.00,4,2026-01;2026-02",
+            "SupB,painting_printing,3000.00,3,2026-01",
         ],
     )
     suppliers = load_suppliers(path)
     assert suppliers[0]["supplier"] == "SupA"
     assert suppliers[0]["amount_cny"] == 6000.0
-    assert suppliers[0]["months"] == []
+    assert suppliers[0]["months"] == ["2026-01", "2026-02"]
 
 
 def test_benchmarks_keep_source_links(reports_dir):
