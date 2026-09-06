@@ -35,6 +35,7 @@ def test_mock_data_matches_real_schema(mock_data):
         "stages",
         "stage_pages",
         "ideal_timeline",
+        "ia",
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
@@ -61,9 +62,9 @@ def test_html_has_seven_tabs_and_fallback_tables(html):
 
 
 def test_first_tab_visible_without_js(html):
-    # the overview panel must ship with the active class, or the whole
+    # EI-1: the home panel must ship with the active class, or the whole
     # page is blank until the first click (regression)
-    assert 'id="overview" class="tab-panel active"' in html
+    assert 'id="home" class="tab-panel active"' in html
     assert html.count('class="tab-panel active"') == 1
 
 
@@ -283,17 +284,14 @@ def test_hash_router_and_stage_page_skeleton(html):
         assert f'id="stage-slot-{slot}"' in view
 
 
-def test_hash_router_defaults_to_overview(html):
-    """Back from a stage page to the entry URL with the empty hash fires
-    hashchange with a hash matching neither route — the router must land on
-    the overview tab, not leave a dead stage view with no tab highlighted
-    (review on PR 19)."""
+def test_hash_router_defaults_to_home(html):
+    """EI-1: the empty/unknown hash must land on #/home (the new default),
+    not leave a dead screen with no nav highlighted."""
     router = html.split("function route()", 1)[1].split(
         "window.addEventListener('hashchange'", 1
     )[0]
-    # unguarded fallback: any non-stage hash (empty, '#/overview', stray)
-    assert "showTab('overview');" in router
-    assert "location.hash === '#/overview'" not in router
+    assert "IA.default_hash" in router  # unguarded fallback to home
+    assert "showTab('overview');" not in router
 
 
 # --- PE-4: ideal production timeline (reference Gantt on the Overview) ----
@@ -400,3 +398,102 @@ def test_html_stage_page_not_booked_plate(html):
 
 def test_html_stage_page_renders_avg_line_stat(html):
     assert "Avg per line" in html
+
+
+# --- EI-1: IA spec + design tokens + app shell (nav/breadcrumbs/router) ---
+
+DEEP_DIVE_TABS = ["cost", "timelines", "suppliers", "benchmarks",
+                  "optimizations", "glossary"]
+ALL_TABS = ["overview"] + DEEP_DIVE_TABS
+
+
+def test_payload_has_ia_route_table(mock_data):
+    ia = mock_data["ia"]
+    assert ia["default_hash"] == "#/home"
+    # old addresses keep working via redirects
+    assert ia["redirects"]["#/overview"] == "#/tab/overview"
+    routes = {r["hash"]: r for r in ia["routes"]}
+    assert routes["#/home"]["title"] == "Home"
+    for tid in ALL_TABS:
+        assert f"#/tab/{tid}" in routes
+    # every screen carries breadcrumbs rooted at Home
+    assert all(r["crumbs"][0] == "Home" for r in ia["routes"])
+    # tab titles in the route table match the rendered TABS
+    assert routes["#/tab/cost"]["title"] == "Cost structure"
+
+
+def test_html_nav_header_home_stage_menu_deep_dive(html):
+    assert 'id="main-nav"' in html
+    assert '<a href="#/home">Home</a>' in html
+    # Stage menu entry points at the overview (where the stage list lives)
+    assert '<a href="#/tab/overview">Stage menu</a>' in html
+    # Deep dive ▾ dropdown carries every remaining tab
+    assert "Deep dive ▾" in html
+    dd = html.split("Deep dive ▾", 1)[1].split("</details>", 1)[0]
+    for tid in DEEP_DIVE_TABS:
+        assert f'href="#/tab/{tid}"' in dd
+
+
+def test_html_breadcrumbs_and_back_on_every_screen(html):
+    assert 'id="crumbs"' in html
+    assert 'id="back-link"' in html
+    # JS fills crumbs for tab routes and stage pages alike
+    assert "function crumbsRender(" in html
+
+
+def test_html_router_redirects_old_hashes(html):
+    """'#/overview' (old default) must redirect, not render as-is."""
+    assert "REDIRECTS" in html
+    assert '"#/overview": "#/tab/overview"' in html  # in the payload
+
+
+def test_html_router_maps_tab_hashes(html):
+    router = html.split("function route()", 1)[1].split(
+        "window.addEventListener('hashchange'", 1
+    )[0]
+    assert "#/tab/" in html
+    assert "location.replace" in router  # redirects keep no dead history entry
+
+
+def test_html_old_tabs_content_unchanged(html):
+    """Old tab panels stay in the DOM with their ids — only routing moves."""
+    for tid in ALL_TABS:
+        assert f'id="{tid}"' in html
+        assert 'role="tabpanel"' in html
+
+
+def test_html_stage_back_link_points_to_new_overview_route(html):
+    view = html.split('id="stage-view"', 1)[1].split("</section>", 1)[0]
+    assert 'href="#/tab/overview"' in view
+
+
+def test_html_design_tokens_present(html):
+    import re
+
+    for tok in ["--kpi-size", "--kpi-label-size", "--h2-size", "--text-sm",
+                "--space-1", "--card-radius", "--card-shadow", "--card-bg",
+                "--status-good", "--status-warn", "--status-bad",
+                "--status-neutral", "--accent"]:
+        assert tok in html, tok
+    m = re.search(r"--kpi-size:\s*(\d+)px", html)
+    assert m and 40 <= int(m.group(1)) <= 48  # large KPI per IA spec
+    # tokens are actually applied, not just declared
+    assert "font-size: var(--kpi-size)" in html
+
+
+def test_home_screen_is_question_led_kpi_landing(html):
+    home = html.split('id="home"', 1)[1].split("</section>", 1)[0]
+    assert "tile kpi" in home
+    assert "Total spend" in home  # KPI tiles from the overview payload
+
+
+def test_docs_ia_spec_exists_and_public_safe():
+    ia_md = Path(__file__).resolve().parent.parent / "docs" / "ia.md"
+    assert ia_md.exists()
+    text = ia_md.read_text(encoding="utf-8")
+    # principles from the brief
+    assert "5-second" in text
+    assert "One question per screen" in text
+    assert "breadcrumb" in text.lower()
+    # the repo is public: no real money figures in the spec
+    assert "¥" not in text

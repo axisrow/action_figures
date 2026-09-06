@@ -240,7 +240,7 @@ def build_mock_data() -> dict:
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
-        return build_dashboard_data(root)
+        return build_dashboard_data(root, tab_titles=_TAB_TITLES())
 
 
 # ---------------------------------------------------------------------------
@@ -805,69 +805,156 @@ TABS = [
     ("glossary", "Glossary", _render_glossary),
 ]
 
+
+def _TAB_TITLES() -> dict:
+    # tab ids -> nav titles for the IA route table (EI-1); a function so it
+    # reads the TABS constant lazily (build_mock_data runs before render)
+    return {tid: title for tid, title, _fn in TABS}
+
+
+def _render_home(d: dict) -> str:
+    """EI-1 Home screen: the one-page answer to 'where does the money go?',
+    large KPI tiles + the two ways in (stage menu / deep dive)."""
+    tiles = d["overview"]["tiles"]
+    ex = d["overview"].get("executive") or {}
+    kpis = "".join(
+        f'<div class="tile kpi"><div class="tile-num">{val}</div>'
+        f'<div class="tile-label">{label}</div></div>'
+        for label, val in [
+            ("Total spend", _fmt_cny(tiles["total_spend_cny"])),
+            ("Expense lines", str(tiles["total_lines"])),
+            ("Styles tracked", str(tiles["num_styles"])),
+            ("Top stage", _label(tiles["top_stage"])),
+        ]
+    )
+    bullets = "".join(
+        f"<li>{_esc(b)}</li>" for b in (ex.get("bullets") or [])[:3]
+    )
+    links = "".join(
+        f'<a class="home-link" href="#/tab/{tid}">{title} →</a>'
+        for tid, title, _fn in TABS
+    )
+    return (
+        "<h2>Where does the money go?</h2>"
+        '<p class="lead">One screen with the answer; every number below '
+        "clicks through to the screen that proves it.</p>"
+        f'<div class="tiles kpis">{kpis}</div>'
+        + (f'<ul class="exec">{bullets}</ul>' if bullets else "")
+        + '<h3>Start here</h3><div class="home-links">'
+        '<a class="home-link" href="#/tab/overview">Stage menu — how a figure '
+        "is made, stage by stage →</a>" + links + "</div>"
+    )
+
 CSS = """
-:root { color-scheme: light; }
+:root { color-scheme: light;
+  /* EI-1 design tokens — see docs/ia.md §Design tokens */
+  --kpi-size: 44px;            /* large KPI numbers, 40-48px band */
+  --kpi-label-size: 12px;
+  --tile-num-size: 24px;
+  --h2-size: 26px; --h3-size: 17px;
+  --text-base: 15px; --text-sm: 13.5px;
+  --text-muted: #636e72; --ink: #2d3436; --bg: #f5f7fa;
+  --accent: #0984e3;
+  --space-1: 8px; --space-2: 12px; --space-3: 16px; --space-4: 24px;
+  --card-bg: #fff; --card-radius: 10px;
+  --card-shadow: 0 1px 3px rgba(0,0,0,.08);
+  /* status palette (verdicts, data-quality notes) */
+  --status-good: #00b894; --status-warn: #fdcb6e;
+  --status-bad: #d63031; --status-neutral: #b2bec3;
+}
 * { box-sizing: border-box; }
 body { margin: 0; font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
-       background: #f5f7fa; color: #2d3436; }
-header { background: #2d3436; color: #fff; padding: 14px 24px; position: sticky;
+       background: var(--bg); color: var(--ink); }
+header { background: var(--ink); color: #fff; padding: 14px 24px; position: sticky;
          top: 0; z-index: 5; }
 header h1 { margin: 0; font-size: 18px; }
 header .sub { opacity: .7; font-size: 12px; }
-nav { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
-nav button { border: 0; background: #454d50; color: #dfe6e9; padding: 7px 14px;
-             border-radius: 6px 6px 0 0; cursor: pointer; font-size: 14px; }
-nav button.active { background: #f5f7fa; color: #2d3436; font-weight: 600; }
+nav#main-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+               margin-top: 10px; }
+nav#main-nav > a, nav#main-nav .dd summary { color: #dfe6e9; text-decoration: none;
+         padding: 7px 14px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+nav#main-nav > a:hover, nav#main-nav .dd summary:hover { background: #454d50; }
+nav#main-nav > a.active { background: var(--bg); color: var(--ink); font-weight: 600; }
+nav#main-nav .dd { position: relative; display: inline-block; }
+nav#main-nav .dd summary { list-style: none; }
+nav#main-nav .dd summary::-webkit-details-marker { display: none; }
+nav#main-nav .dd ul { position: absolute; top: 100%; left: 0; background: #454d50;
+         margin: 2px 0 0; padding: 4px; list-style: none; border-radius: 0 0 8px 8px;
+         min-width: 200px; z-index: 6; }
+nav#main-nav .dd li a { display: block; color: #dfe6e9; text-decoration: none;
+         padding: 7px 12px; border-radius: 6px; font-size: 14px; }
+nav#main-nav .dd li a:hover { background: #2d3436; }
+#crumbs-bar { background: var(--card-bg); border-bottom: 1px solid #ecf0f1;
+              padding: var(--space-1) var(--space-4); display: flex; gap: var(--space-3);
+              align-items: center; }
+#crumbs { font-size: var(--text-sm); color: var(--text-muted); }
+#crumbs a { color: var(--accent); text-decoration: none; }
+#crumbs a:hover { text-decoration: underline; }
+#crumbs .sep { margin: 0 6px; color: var(--status-neutral); }
+#back-link { margin-left: auto; color: var(--accent); text-decoration: none;
+             font-size: var(--text-sm); }
+#back-link:hover { text-decoration: underline; }
 main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
-h2 { margin: 8px 0 12px; } h3 { margin: 22px 0 8px; }
-.lead { color: #636e72; }
-.hint { color: #636e72; font-size: 13.5px; margin: 4px 0 8px; }
-.exec { background: #fff; border-left: 4px solid #6c5ce7; border-radius: 8px;
-        padding: 14px 20px; margin: 10px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+h2 { margin: 8px 0 12px; font-size: var(--h2-size); }
+h3 { margin: 22px 0 8px; font-size: var(--h3-size); }
+.lead { color: var(--text-muted); }
+.hint { color: var(--text-muted); font-size: var(--text-sm); margin: 4px 0 8px; }
+.exec { background: var(--card-bg); border-left: 4px solid #6c5ce7;
+        border-radius: var(--card-radius);
+        padding: 14px 20px; margin: 10px 0; box-shadow: var(--card-shadow); }
 .exec li { margin: 6px 0; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
-         gap: 12px; margin: 14px 0; }
-.tile, .opt-card, .sup-card, .bench-card { background: #fff; border-radius: 10px; padding: 14px 16px;
-         box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-.bench-card ul { margin: 6px 0; padding-left: 20px; }
-.bench-card .srcs { font-size: 12px; color: #0984e3; margin-top: 8px; }
-.tile-num { font-size: 24px; font-weight: 700; }
-.tile-label { color: #636e72; font-size: 12px; text-transform: uppercase;
+         gap: var(--space-2); margin: 14px 0; }
+.tile, .opt-card, .sup-card, .bench-card { background: var(--card-bg);
+         border-radius: var(--card-radius); padding: 14px var(--space-3);
+         box-shadow: var(--card-shadow); }
+.tile-num { font-size: var(--tile-num-size); font-weight: 700; }
+.tile.kpi .tile-num { font-size: var(--kpi-size); line-height: 1.15; }
+.tile.kpi .tile-label { font-size: var(--kpi-label-size); }
+.tile-label { color: var(--text-muted); font-size: 12px; text-transform: uppercase;
               letter-spacing: .04em; }
+.home-links { display: grid; grid-template-columns: repeat(auto-fit,
+              minmax(260px,1fr)); gap: var(--space-2); margin: var(--space-2) 0; }
+.home-link { background: var(--card-bg); border-radius: var(--card-radius);
+             box-shadow: var(--card-shadow); padding: var(--space-2) var(--space-3);
+             color: var(--ink); text-decoration: none; font-weight: 600; }
+.home-link:hover { color: var(--accent); }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr));
-         gap: 12px; margin: 12px 0; }
-.opt-card .saving { color: #00b894; font-weight: 700; margin: 6px 0; }
-.opt-card .base, .proof { color: #636e72; font-size: 13px; }
+         gap: var(--space-2); margin: 12px 0; }
+.opt-card .saving { color: var(--status-good); font-weight: 700; margin: 6px 0; }
+.opt-card .base, .proof { color: var(--text-muted); font-size: 13px; }
 .mix-row { display: flex; justify-content: space-between; font-size: 13px; }
-.chart { background: #fff; border-radius: 10px; margin: 10px 0;
-         box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-table { border-collapse: collapse; width: 100%; background: #fff; font-size: 13.5px;
-        margin: 8px 0 18px; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-radius: 8px; }
+.chart { background: var(--card-bg); border-radius: var(--card-radius);
+         margin: 10px 0; box-shadow: var(--card-shadow); }
+table { border-collapse: collapse; width: 100%; background: var(--card-bg);
+        font-size: var(--text-sm);
+        margin: 8px 0 18px; box-shadow: var(--card-shadow);
+        border-radius: var(--card-radius); }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #ecf0f1; }
 th { background: #dfe6e9; position: sticky; top: 0; }
 details summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 .filters { display: flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
-.filters input, .filters select { padding: 8px 10px; border: 1px solid #b2bec3;
+.filters input, .filters select { padding: 8px 10px; border: 1px solid var(--status-neutral);
                                   border-radius: 6px; font-size: 14px; }
 .hidden { display: none !important; }
 .stage-menu { list-style: none; margin: 10px 0; padding: 0; }
-.stage-menu li { background: #fff; border-radius: 10px; margin: 8px 0;
-                 box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 10px 14px; }
+.stage-menu li { background: var(--card-bg); border-radius: var(--card-radius);
+                 margin: 8px 0; box-shadow: var(--card-shadow); padding: 10px 14px; }
 .stage-link { display: flex; align-items: center; gap: 10px; text-decoration: none;
-              color: #2d3436; font-weight: 600; }
-.stage-link:hover .stage-name { color: #0984e3; }
+              color: var(--ink); font-weight: 600; }
+.stage-link:hover .stage-name { color: var(--accent); }
 .stage-no { background: #dfe6e9; border-radius: 50%; min-width: 26px; height: 26px;
             display: inline-flex; align-items: center; justify-content: center;
             font-size: 13px; flex: none; }
 .stage-name { flex: 1 1 auto; }
-.stage-amount { color: #636e72; font-weight: 400; font-size: 13.5px; }
+.stage-amount { color: var(--text-muted); font-weight: 400; font-size: var(--text-sm); }
 .stage-menu .hint { margin: 4px 0 0 36px; font-size: 13px; }
-a.back { display: inline-block; margin: 6px 0 10px; color: #0984e3;
+a.back { display: inline-block; margin: 6px 0 10px; color: var(--accent);
          text-decoration: none; }
 a.back:hover { text-decoration: underline; }
-footer { text-align: center; color: #b2bec3; font-size: 12px; padding: 20px; }
+footer { text-align: center; color: var(--status-neutral); font-size: 12px; padding: 20px; }
 """
 
 
@@ -877,14 +964,24 @@ def render_html(data: dict, generated_from: str) -> str:
     palette = _stage_palette(data["cost_structure"]["heatmap"]["stages"])
     months = data["cost_structure"]["months"]
     period = f"{months[0]}…{months[-1]}" if months else ""
-    tabs_html = "".join(
-        _section(tid, title, fn(data), active=(i == 0))
-        for i, (tid, title, fn) in enumerate(TABS)
+    tabs_html = (
+        _section("home", "Home", _render_home(data), active=True)
+        + "".join(
+            _section(tid, title, fn(data), active=False)
+            for tid, title, fn in TABS
+        )
     )
-    nav_html = "".join(
-        f'<button role="tab" data-tab="{tid}" '
-        f'{"active" if i == 0 else ""}>{title}</button>'
-        for i, (tid, title, _fn) in enumerate(TABS)
+    # EI-1 shell nav: Home / Stage menu / Deep dive ▾ (anchors — the hash
+    # router owns screen switching, so nav works without extra JS)
+    deep_dive = "".join(
+        f"<li><a href=\"#/tab/{tid}\">{title}</a></li>"
+        for tid, title, _fn in TABS[1:]
+    )
+    nav_html = (
+        '<a href="#/home">Home</a>'
+        '<a href="#/tab/overview">Stage menu</a>'
+        '<details class="dd"><summary>Deep dive ▾</summary>'
+        f"<ul>{deep_dive}</ul></details>"
     )
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -899,12 +996,16 @@ def render_html(data: dict, generated_from: str) -> str:
 <header>
   <h1>Action Figures — Production Cost Dashboard</h1>
   <div class="sub">Data source: {generated_from} · {period} · all amounts in CNY</div>
-  <nav id="tabs">{nav_html}</nav>
+  <nav id="main-nav" aria-label="Main">{nav_html}</nav>
 </header>
+<div id="crumbs-bar">
+  <nav id="crumbs" aria-label="Breadcrumb"><span>Home</span></nav>
+  <a id="back-link" href="#/home">← Back</a>
+</div>
 <main>
 {tabs_html}
 <section id="stage-view" class="tab-panel" role="region" aria-label="Stage detail">
-  <p><a class="back" href="#/overview">← Back to overview</a></p>
+  <p><a class="back" href="#/tab/overview">← Back to overview</a></p>
   <h2 id="stage-title"></h2>
   <p id="stage-desc" class="lead"></p>
   <div id="stage-stats" class="tiles"></div>
@@ -1169,27 +1270,33 @@ def render_html(data: dict, generated_from: str) -> str:
     }});
   }}
 
-  // Tabs
-  var nav = document.getElementById('tabs');
+  // Screen switching (EI-1): the nav is plain anchors, so the hash router
+  // below is the single owner of which panel is visible.
   function showTab(id) {{
     document.querySelectorAll('.tab-panel').forEach(function (p) {{
       p.classList.toggle('active', p.id === id);
     }});
-    nav.querySelectorAll('button').forEach(function (b) {{
-      b.classList.toggle('active', b.dataset.tab === id);
-    }});
     charts.forEach(function (c) {{ c.resize(); }});
   }}
-  nav.addEventListener('click', function (e) {{
-    var btn = e.target.closest('button[data-tab]');
-    if (!btn) return;
-    showTab(btn.dataset.tab);
-    if (location.hash.indexOf('#/stage/') === 0) {{
-      // leaving a stage page via the tab bar: normalize the URL without a
-      // history entry (file:// browsers may refuse replaceState — ignore)
-      try {{ history.replaceState(null, '', '#/overview'); }} catch (err) {{}}
-    }}
-  }});
+
+  // Breadcrumbs: items are label+optional hash pairs — the last one is the
+  // current screen (plain text); the back link targets the parent crumb.
+  function crumbsRender(items, backTarget) {{
+    var el = document.getElementById('crumbs');
+    el.innerHTML = items.map(function (it, i) {{
+      var last = i === items.length - 1;
+      return last || !it.hash
+        ? '<span>' + it.label + '</span>'
+        : '<a href="' + it.hash + '">' + it.label + '</a>';
+    }}).join('<span class="sep">›</span>');
+    document.getElementById('back-link').href = backTarget || '#/home';
+  }}
+
+  function setNav(hash) {{
+    document.querySelectorAll('#main-nav a').forEach(function (a) {{
+      a.classList.toggle('active', a.getAttribute('href') === hash);
+    }});
+  }}
 
   // Hash router (Process Explorer): '#/overview' <-> '#/stage/<stage_id>'.
   // back/forward buttons work via the hashchange listener; a stage id the
@@ -1298,21 +1405,51 @@ def render_html(data: dict, generated_from: str) -> str:
     }};
   }}
 
+  // Hash router (EI-1). Routes come from DATA.ia (built alongside the
+  // payload): '#/home' (default), '#/tab/<name>', '#/stage/<id>'. Old
+  // addresses in IA.redirects are replaced, not pushed, so the Back button
+  // never walks through a dead URL.
+  var IA = DATA.ia || {{}};
+  var REDIRECTS = IA.redirects || {{}};
+  var ROUTES = {{}};
+  (IA.routes || []).forEach(function (r) {{ ROUTES[r.hash] = r; }});
+
+  function crumbItems(labels) {{
+    // first crumb always links Home; later ones are the current trail
+    return labels.map(function (label, i) {{
+      return {{ label: label, hash: i === 0 ? '#/home' : null }};
+    }});
+  }}
+
   function route() {{
+    if (REDIRECTS[location.hash]) {{
+      try {{ location.replace(REDIRECTS[location.hash]); }} catch (err) {{}}
+      return;
+    }}
     var m = location.hash.match(/^#\\/stage\\/([A-Za-z0-9_-]+)$/);
     if (m && stagesById[m[1]]) {{
       fillStage(stagesById[m[1]]);
       document.querySelectorAll('.tab-panel').forEach(function (p) {{
         p.classList.toggle('active', p.id === 'stage-view');
       }});
-      nav.querySelectorAll('button').forEach(function (b) {{ b.classList.remove('active'); }});
+      crumbsRender(
+        crumbItems((IA.stage_crumbs || ['Home']).concat(
+          [stagesById[m[1]].label_en])),
+        '#/tab/overview');
+      setNav('');  // stage pages highlight nothing in the top nav
       window.scrollTo(0, 0);
       return;
     }}
-    // '#/overview', the empty hash (entry URL after Back from a stage page)
-    // and any stray hash all land on the overview tab — the server-rendered
-    // initial state
-    showTab('overview');
+    // '#/tab/<name>' routes; the empty hash, the entry URL and any stray
+    // hash all land on the default screen (home)
+    var r = ROUTES[location.hash] || ROUTES[IA.default_hash];
+    if (r) {{
+      showTab(r.screen);
+      crumbsRender(crumbItems(r.crumbs || ['Home']), '#/home');
+    }} else {{
+      showTab('home');
+    }}
+    setNav(r ? r.hash : (IA.default_hash || '#/home'));
   }}
   window.addEventListener('hashchange', route);
   route();
@@ -1386,6 +1523,7 @@ def main(argv: list[str] | None = None) -> int:
         data = build_dashboard_data(
             args.reports,
             supplier_translations_path=dict_csv if has_dict else None,
+            tab_titles=_TAB_TITLES(),
         )
         src = f"reports/ ({args.reports})"
     else:

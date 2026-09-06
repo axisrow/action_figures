@@ -701,6 +701,52 @@ def build_sankey(
     return {"nodes": nodes, "links": links, "top_suppliers": fallback_rows}
 
 
+# --- IA route table (EI-1) --------------------------------------------------
+
+# Deep-dive screens under '#/tab/<id>' (order matches the shell nav).
+IA_TABS = [
+    "overview",
+    "cost",
+    "timelines",
+    "suppliers",
+    "benchmarks",
+    "optimizations",
+    "glossary",
+]
+
+# Old hash addresses keep working: each maps to its new route.
+IA_REDIRECTS = {"#/overview": "#/tab/overview"}
+
+
+def _ia_title(tab_id: str, titles: dict[str, str]) -> str:
+    if tab_id in titles:
+        return titles[tab_id]
+    return tab_id.replace("_", " ").title()
+
+
+def build_ia(tab_titles: dict[str, str]) -> dict:
+    """Route table for the app shell (issue #26): one entry per screen with
+    its hash, title and breadcrumbs. The shell nav, breadcrumbs and the
+    client-side router all render from this single payload section."""
+    routes = [
+        {"hash": "#/home", "screen": "home", "title": "Home",
+         "crumbs": ["Home"]},
+    ]
+    for tab_id in IA_TABS:
+        title = _ia_title(tab_id, tab_titles)
+        routes.append(
+            {"hash": f"#/tab/{tab_id}", "screen": tab_id, "title": title,
+             "crumbs": ["Home", title]},
+        )
+    return {
+        "default_hash": "#/home",
+        "redirects": dict(IA_REDIRECTS),
+        "routes": routes,
+        # stage pages: '#/stage/<id>' -> Home › Process › <stage label>
+        "stage_crumbs": ["Home", "Process"],
+    }
+
+
 # --- stage pages (PE-3) ----------------------------------------------------
 
 # Forensic verdict (GH#16): packaging and QC/testing costs are not booked in
@@ -796,9 +842,14 @@ def build_stage_pages(
 
 
 def build_dashboard_data(
-    reports_dir: Path, supplier_translations_path: Path | None = None
+    reports_dir: Path,
+    supplier_translations_path: Path | None = None,
+    tab_titles: dict[str, str] | None = None,
 ) -> dict:
-    """One JSON-safe dict consumed by build_dashboard.render_html()."""
+    """One JSON-safe dict consumed by build_dashboard.render_html().
+
+    ``tab_titles`` maps tab ids to nav titles so the IA route table (EI-1)
+    carries the same labels the shell renders from TABS."""
     reports_dir = Path(reports_dir)
     translations = (
         load_supplier_translations(supplier_translations_path)
@@ -996,4 +1047,5 @@ def build_dashboard_data(
         "stages": stage_menu,
         "stage_pages": stage_pages,
         "ideal_timeline": build_ideal_timeline(stage_menu),
+        "ia": build_ia(tab_titles or {}),
     }
