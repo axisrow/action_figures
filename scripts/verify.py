@@ -5,6 +5,13 @@ dashboard payload, git hygiene, qty×unit_price) against the real datasets,
 prints a human-readable report, saves it to reports/verification.md and exits
 0/1. Reports are gitignored and never committed.
 
+Executive IA route checks (GH#31): every payload route reconciles against
+its source CSVs (home stage cards vs stages×stage_summary, supplier pages
+vs the supplier CSVs, optimization / benchmark detail pages vs their
+reports), the Σ of the Home stage-menu cards equals the grand total, and
+the route table is complete — every screen reachable, every link and
+breadcrumb/back target resolving, no dead ends.
+
 Usage: python3 scripts/verify.py
 """
 
