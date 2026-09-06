@@ -206,7 +206,7 @@ CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
 FAVICON_SVG = (
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
     "<rect width='32' height='32' rx='7' fill='#0984e3'/>"
-    "<path d='M5 24 11 8 17 24' fill='none' stroke='#e17055' "
+    "<path d='M5 24 11 8 17 24 M8 18h6' fill='none' stroke='#e17055' "
     "stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/>"
     "<path d='M21 24V8h7M21 16h6' fill='none' stroke='#fdcb6e' "
     "stroke-width='3' stroke-linecap='round'/>"

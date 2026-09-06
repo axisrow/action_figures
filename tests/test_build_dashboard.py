@@ -84,6 +84,7 @@ def test_html_has_inline_svg_favicon(html):
     svg = urllib.parse.unquote(m.group(1).split(",", 1)[1])
     assert svg.startswith("<svg")
     assert "viewBox='0 0 32 32'" in svg  # crisp at any tab size
+    assert "M8 18h6" in svg  # A has a crossbar, or 16px tabs read a caret
 
 
 def test_no_autoloaded_asset_can_404(html):
