@@ -75,6 +75,13 @@ MOCK_BY_MONTH_STAGE = """month,stage,amount_cny
 2026-04,injection_molding,12000.00
 2026-04,packaging,12000.00
 2026-04,logistics_freight,7000.00
+2026-01,design_prototyping,1200.00
+2026-02,design_prototyping,800.00
+2026-03,textile_accessories,3000.00
+2026-05,assembly_processing,15000.00
+2026-02,admin_other,1500.00
+2026-03,admin_other,1500.00
+2026-04,unclassified,1200.00
 """
 
 MOCK_BY_DAY_STAGE = """date,stage,amount_cny,n_lines
@@ -103,6 +110,13 @@ MOCK_BY_DAY_STAGE = """date,stage,amount_cny,n_lines
 2026-02-17,logistics_freight,8000.00,14
 2026-03-12,logistics_freight,7000.00,13
 2026-04-11,logistics_freight,7000.00,14
+2026-01-20,design_prototyping,1200.00,2
+2026-02-18,design_prototyping,800.00,2
+2026-03-18,textile_accessories,3000.00,6
+2026-05-22,assembly_processing,15000.00,29
+2026-02-25,admin_other,1500.00,4
+2026-03-27,admin_other,1500.00,5
+2026-04-15,unclassified,1200.00,7
 """
 
 MOCK_BY_STYLE_STAGE = """style_no,stage,amount_cny
