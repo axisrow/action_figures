@@ -1024,13 +1024,63 @@ class TestSupplierPagesCheck:
         )
         assert res.status == "pending"
 
-    def test_missing_month_csv_pending(self, tmp_path):
+    def test_missing_stage_csv_pending(self, tmp_path):
         write_stage_page_reports(tmp_path)
         payload = exec_payload(tmp_path)
-        (tmp_path / "reports" / "audit" / "by_supplier_month.csv").unlink()
+        (tmp_path / "reports" / "audit" / "by_supplier_stage.csv").unlink()
         res = check_supplier_pages(write_exec_dist(tmp_path, payload),
                                    tmp_path / "reports")
         assert res.status == "pending"
+
+    def test_legacy_stage_csv_without_month_file_ok(self, tmp_path):
+        """Legacy per-month by_supplier_stage.csv without by_supplier_month.csv:
+        months derive from the catalog rows (the builder's fallback) and
+        n_lines counts rows, mirroring load_suppliers."""
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        audit = tmp_path / "reports" / "audit"
+        pd.DataFrame(
+            [
+                {"supplier": "杭州宏达", "stage": "design_prototyping",
+                 "month": "2026-01", "amount_cny": 20.0},
+                {"supplier": "东莞精密", "stage": "design_prototyping",
+                 "month": "2026-02", "amount_cny": 10.0},
+                {"supplier": "", "stage": "packaging", "month": "2026-01",
+                 "amount_cny": 20.0},
+            ]
+        ).to_csv(audit / "by_supplier_stage.csv", index=False)
+        (audit / "by_supplier_month.csv").unlink()
+        payload["supplier_pages"]["杭州宏达"]["months"] = [
+            {"month": "2026-01", "amount_cny": 20.0}
+        ]
+        payload["supplier_pages"]["Unattributed"]["stats"]["n_lines"] = 1
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_aggregated_layout_without_month_file_ok(self, tmp_path):
+        """Aggregated catalog + no by_supplier_month.csv: the builder renders
+        no monthly series at all, the check must expect empty months."""
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        (tmp_path / "reports" / "audit" / "by_supplier_month.csv").unlink()
+        for page in payload["supplier_pages"].values():
+            page["months"] = []
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_missing_style_file_ok_with_empty_styles(self, tmp_path):
+        """No by_supplier_style.csv: the builder renders no styles, the
+        check must expect empty top_styles instead of going pending."""
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        (tmp_path / "reports" / "audit" / "by_supplier_style.csv").unlink()
+        for page in payload["supplier_pages"].values():
+            page["top_styles"] = []
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "ok", res.details
 
     def test_total_drift_fails(self, tmp_path):
         write_stage_page_reports(tmp_path)

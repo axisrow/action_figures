@@ -703,19 +703,16 @@ def check_home_reconciles(dist_html: Path, reports_root: Path, tol: float = TOL)
     )
 
 
-def _supplier_catalog(reports_root: Path) -> tuple[dict | None, str]:
-    """by_supplier_stage.csv aggregated like the catalog (blank -> Unattributed).
+def _supplier_catalog(stage_df: pd.DataFrame) -> dict:
+    """by_supplier_stage rows aggregated like the catalog (blank -> Unattributed).
 
-    Returns ({name: {amount, n_lines, mix, months}}, "") or (None, error)
-    when the CSV is missing. Supports both layouts load_suppliers accepts.
+    Supports both layouts load_suppliers accepts: aggregated
+    (months_active / n_lines columns) and legacy per-month (month column,
+    one expense line per row).
     """
-    path = Path(reports_root) / "audit" / "by_supplier_stage.csv"
-    if not path.exists():
-        return None, "by_supplier_stage.csv missing"
-    df = pd.read_csv(path, keep_default_na=False)
-    aggregated = "months_active" in df.columns
+    aggregated = "months_active" in stage_df.columns
     agg: dict[str, dict] = {}
-    for r in df.itertuples():
+    for r in stage_df.itertuples():
         name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
         entry = agg.setdefault(
             name, {"amount": 0.0, "n_lines": 0, "mix": {}, "months": set()}
@@ -731,7 +728,7 @@ def _supplier_catalog(reports_root: Path) -> tuple[dict | None, str]:
         else:
             entry["months"].add(str(r.month))
             entry["n_lines"] += 1
-    return agg, ""
+    return agg
 
 
 def check_supplier_pages(
@@ -741,9 +738,14 @@ def check_supplier_pages(
 
     Every supplier of by_supplier_stage.csv (blank bucket as Unattributed)
     must have exactly one page whose stats (total ± tol, n_lines, months
-    active), stage_mix, monthly series (by_supplier_month.csv) and styles
-    (by_supplier_style.csv, blank styles dropped) match the CSV rows — and
+    active), stage_mix, monthly series and styles match the CSV rows — and
     no page may exist for a supplier outside the catalog.
+
+    Mirrors the builder's data tolerance: months come from
+    by_supplier_month.csv, else from the legacy per-month rows of the
+    catalog CSV itself, else the pages carry no monthly series; styles
+    come from by_supplier_style.csv when present, else no styles. Only
+    the catalog CSV is required.
     """
     payload, error = _load_dash_payload(dist_html)
     if payload is None:
@@ -752,36 +754,41 @@ def check_supplier_pages(
     if pages is None:
         return CheckResult("supplier_pages", FAIL, "payload has no supplier_pages section")
     reports_root = Path(reports_root)
-    month_path = reports_root / "audit" / "by_supplier_month.csv"
-    style_path = reports_root / "audit" / "by_supplier_style.csv"
-    missing = [p.name for p in (month_path, style_path) if not p.exists()]
-    catalog, cat_error = _supplier_catalog(reports_root)
-    if catalog is None:
-        missing.append(cat_error)
-    if missing:
-        return CheckResult(
-            "supplier_pages", PENDING, f"missing CSVs: {', '.join(missing)}"
-        )
+    stage_path = reports_root / "audit" / "by_supplier_stage.csv"
+    if not stage_path.exists():
+        return CheckResult("supplier_pages", PENDING, "by_supplier_stage.csv missing")
+    stage_df = pd.read_csv(stage_path, keep_default_na=False)
+    catalog = _supplier_catalog(stage_df)
 
     details: list[str] = []
     ok = True
 
+    # monthly series: by_supplier_month.csv, else the legacy per-month rows
+    # of the catalog CSV (same fallback order as load_by_supplier_month),
+    # else nothing; duplicate (supplier, month) rows sum
     months_map: dict[str, dict[str, float]] = {}
-    for r in pd.read_csv(month_path, keep_default_na=False).itertuples():
-        name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
-        # duplicate (supplier, month) rows sum, mirroring the builder's
-        # load_by_supplier_month aggregation
-        series = months_map.setdefault(name, {})
-        series[str(r.month)] = series.get(str(r.month), 0.0) + float(r.amount_cny)
+    month_path = reports_root / "audit" / "by_supplier_month.csv"
+    months_source = (
+        month_path
+        if month_path.exists()
+        else (stage_path if "month" in stage_df.columns else None)
+    )
+    if months_source is not None:
+        for r in pd.read_csv(months_source, keep_default_na=False).itertuples():
+            name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
+            series = months_map.setdefault(name, {})
+            series[str(r.month)] = series.get(str(r.month), 0.0) + float(r.amount_cny)
 
     styles_map: dict[str, list[dict]] = {}
-    for r in pd.read_csv(style_path, keep_default_na=False).itertuples():
-        name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
-        if not str(r.style_no).strip():
-            continue
-        styles_map.setdefault(name, []).append(
-            {"style_no": _norm_style(r.style_no), "amount_cny": float(r.amount_cny)}
-        )
+    style_path = reports_root / "audit" / "by_supplier_style.csv"
+    if style_path.exists():
+        for r in pd.read_csv(style_path, keep_default_na=False).itertuples():
+            name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
+            if not str(r.style_no).strip():
+                continue
+            styles_map.setdefault(name, []).append(
+                {"style_no": _norm_style(r.style_no), "amount_cny": float(r.amount_cny)}
+            )
 
     extra = sorted(set(pages) - set(catalog))
     if extra:
