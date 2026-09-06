@@ -150,6 +150,20 @@ def test_twin_skips_logistics_rows():
     assert _supplier_proposals(df).empty
 
 
+def test_twin_ignores_channel_suppliers():
+    """外购/外发 are sourcing channels, not counterparty names — a twin
+    match against a channel row must not propose the channel."""
+    df = pd.DataFrame([
+        _row("a1", "木剑护手", supplier="外购", amount=100.0, style_no="0077",
+             month="2025-04", stage="design_prototyping"),
+        _row("a2", "木剑护手", supplier="外发", amount=100.0, style_no="0077",
+             month="2025-04", stage="design_prototyping"),
+        _row("e1", "木剑护手打样", amount=100.0, style_no="UD0077",
+             month="2025-03", stage="design_prototyping"),
+    ])
+    assert _supplier_proposals(df).empty
+
+
 # --- supplier recovery: category dominance -------------------------------
 
 def _design_pool():
@@ -220,6 +234,23 @@ def test_stage_from_supplier_statistics():
     assert row["proposed"] == "textile_accessories"
     assert row["method"] == "supplier_stage"
     assert row["confidence"] == "medium"
+
+
+def test_stage_low_tier_requires_five_rows():
+    """A 2-of-3 stage majority is too thin to propose even at low
+    confidence."""
+    rows = [
+        _row("a1", "买线", supplier="缝衣铺", amount=10.0,
+             stage="textile_accessories"),
+        _row("a2", "买边布", supplier="缝衣铺", amount=20.0,
+             stage="textile_accessories"),
+        _row("a3", "买胶水", supplier="缝衣铺", amount=30.0,
+             stage="raw_materials"),
+        _row("e1", "7号衣车针", supplier="缝衣铺", amount=15.0,
+             stage="unclassified"),
+    ]
+    prop, _ = build_proposals(pd.DataFrame(rows))
+    assert prop[prop["field"] == "stage"].empty
 
 
 def test_stage_hint_for_mold_deposit():

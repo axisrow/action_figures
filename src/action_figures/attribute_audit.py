@@ -51,6 +51,7 @@ CATEGORY_RULES = (
 DOMINANT_SHARE = 0.8
 DOMINANT_MIN_ROWS = 5
 PERFECT_MIN_ROWS = 3  # 100% share with a small pool still earns a low proposal
+STAGE_LOW_SHARE = 0.6  # low tier of supplier_stage; needs DOMINANT_MIN_ROWS too
 
 # Audit-local stage hints (vocabulary the taxonomy misses).
 MOLD_KEYWORDS = ("合金模", "塑胶模", "模定金", "模订金", "开模")
@@ -196,17 +197,25 @@ def _twin_score(rec: dict, other: dict) -> tuple[int, list[str]]:
 
 
 def find_twin(rec: dict, attr_records: list[dict]) -> dict | None:
-    """Best twin (counterpart) attributed row for an empty-supplier row."""
+    """Best twin (counterpart) attributed row for an empty-supplier row.
+
+    Twin candidates sourced through a channel (外购/外发) are skipped: a
+    channel is not a counterparty name, and the twin method exists to name
+    counterparties. (category_dominance may still propose a channel — there
+    the channel is the recorded answer for the whole category.)
+    """
     if _s(rec.get("stage")) == "logistics_freight":
         return None  # courier identity is not inferable from equal freight lines
     best_score = 0
     best: tuple[str, str, list[str]] | None = None
     tied_suppliers: set[str] = set()
     for other in attr_records:
+        supplier = _s(other.get("supplier"))
+        if supplier in CHANNEL_SUPPLIERS:
+            continue
         score, facts = _twin_score(rec, other)
         if score < TWIN_MIN_SCORE:
             continue
-        supplier = _s(other.get("supplier"))
         if score > best_score:
             best_score = score
             best = (supplier, _s(other.get("line_id")), facts)
@@ -283,7 +292,12 @@ def _supplier_candidate(rec, attr_records, known_suppliers):
 # --- stage recovery methods ---------------------------------------------
 
 def find_stage_by_supplier(rec: dict, attr_records: list[dict]) -> dict | None:
-    """Unclassified row with a supplier: dominant stage of that supplier."""
+    """Unclassified row with a supplier: dominant stage of that supplier.
+
+    Both tiers require at least ``DOMINANT_MIN_ROWS`` attributed rows —
+    even a low-confidence proposal must rest on a defensible pool, and a
+    2-of-3 majority is not one.
+    """
     supplier = _s(rec.get("supplier"))
     if _s(rec.get("stage")) != UNCLASSIFIED or not supplier:
         return None
@@ -292,13 +306,13 @@ def find_stage_by_supplier(rec: dict, attr_records: list[dict]) -> dict | None:
         if _s(r.get("supplier")) == supplier and _s(r.get("stage")) != UNCLASSIFIED
     ]
     n = len(pool)
-    if n < PERFECT_MIN_ROWS:
+    if n < DOMINANT_MIN_ROWS:
         return None
     stage, k = Counter(_s(r.get("stage")) for r in pool).most_common(1)[0]
     share = k / n
-    if share >= DOMINANT_SHARE and n >= DOMINANT_MIN_ROWS:
+    if share >= DOMINANT_SHARE:
         confidence = "medium"
-    elif share >= 0.6:
+    elif share >= STAGE_LOW_SHARE:
         confidence = "low"
     else:
         return None
