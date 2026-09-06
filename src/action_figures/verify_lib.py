@@ -289,7 +289,7 @@ def _pkl_total(data_root: Path) -> tuple[int, float] | None:
 
 
 def check_audit_totals(reports_root: Path, data_root: Path, tol: float = TOL) -> CheckResult:
-    """(3) Σ stage_summary and Σ by_supplier_stage == pkl Σamount (± tol)."""
+    """(3) Σ stage_summary, by_supplier_stage and by_day_stage == pkl Σamount (± tol)."""
     reports_root = Path(reports_root)
     details: list[str] = []
     ok = True
@@ -301,6 +301,7 @@ def check_audit_totals(reports_root: Path, data_root: Path, tol: float = TOL) ->
     for csv_name, _cols in (
         ("stage_summary.csv", ("amount_cny", "n_lines")),
         ("by_supplier_stage.csv", ("amount_cny", "n_lines")),
+        ("by_day_stage.csv", ("amount_cny", "n_lines")),
     ):
         path = reports_root / "audit" / csv_name
         if not path.exists():
@@ -321,7 +322,49 @@ def check_audit_totals(reports_root: Path, data_root: Path, tol: float = TOL) ->
     return CheckResult(
         "audit_totals",
         OK if ok else FAIL,
-        f"Σ(stage_summary) == Σ(by_supplier_stage) == Σ(amount) == {total:.2f} CNY / {n_lines} rows",
+        f"Σ(stage_summary) == Σ(by_supplier_stage) == Σ(by_day_stage) == "
+        f"Σ(amount) == {total:.2f} CNY / {n_lines} rows",
+        details,
+    )
+
+
+def check_stage_totals(reports_root: Path, tol: float = TOL) -> CheckResult:
+    """(3b) per-stage Σ(by_day_stage) == stage_summary (amounts ± tol, n_lines)."""
+    reports_root = Path(reports_root)
+    day_path = reports_root / "audit" / "by_day_stage.csv"
+    sum_path = reports_root / "audit" / "stage_summary.csv"
+    if not day_path.exists() or not sum_path.exists():
+        return CheckResult(
+            "stage_totals", PENDING, "by_day_stage.csv / stage_summary.csv missing"
+        )
+    by_day = pd.read_csv(day_path)
+    summary = pd.read_csv(sum_path)
+    per_stage = by_day.groupby("stage").agg(
+        n_lines=("n_lines", "sum"), amount_cny=("amount_cny", "sum")
+    ).to_dict("index")
+    details: list[str] = []
+    ok = True
+    for r in summary.itertuples():
+        if r.stage not in per_stage:
+            ok = False
+            details.append(f"{r.stage}: missing from by_day_stage.csv")
+            continue
+        got_amount = round(float(per_stage[r.stage]["amount_cny"]), 2)
+        got_lines = int(per_stage[r.stage]["n_lines"])
+        if abs(got_amount - float(r.amount_cny)) > tol:
+            ok = False
+            details.append(f"{r.stage}: Σ by_day {got_amount} != stage_summary {float(r.amount_cny)}")
+        if got_lines != int(r.n_lines):
+            ok = False
+            details.append(f"{r.stage}: n_lines {got_lines} != stage_summary {int(r.n_lines)}")
+    extra = sorted(set(per_stage) - set(summary["stage"]))
+    if extra:
+        ok = False
+        details.append(f"stages missing from stage_summary: {', '.join(extra)}")
+    return CheckResult(
+        "stage_totals",
+        OK if ok else FAIL,
+        f"per-stage Σ(by_day_stage) == stage_summary ({len(summary)} stages, ±{tol})",
         details,
     )
 
@@ -485,6 +528,7 @@ def run_checks(
         check_pkl_vs_manifest(data_root),
         check_zh_en_parity(data_root),
         check_audit_totals(reports_root, data_root),
+        check_stage_totals(reports_root),
         check_dashboard_payload(dist_html, reports_root),
         check_git_hygiene(repo_root),
         check_qty_amount(data_root),
