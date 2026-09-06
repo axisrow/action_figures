@@ -45,6 +45,8 @@ import re
 from datetime import date
 from pathlib import Path
 
+from action_figures.ideal_timeline import IDEAL_TIMELINE
+
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
@@ -439,6 +441,101 @@ def load_glossary_md(path: Path) -> list[dict]:
     ]
 
 
+# --- ideal (reference) production timeline --------------------------------
+
+IDEAL_WEEKS_AXIS = (0, 26)
+IDEAL_DISCLAIMER = (
+    "typical durations from market benchmarks; our payment dates are "
+    "not the physical cycle"
+)
+
+
+def _ideal_positions() -> list[list]:
+    """Module rows grouped into sequential timeline positions.
+
+    A position is either one main-chain stage (its variants — e.g. steel vs
+    aluminum tooling — share the slot) or a maximal run of rows with the
+    same non-'main' parallel_group (e.g. molding ‖ textile).
+    """
+    positions: list[list] = []
+    for st in IDEAL_TIMELINE:
+        if positions:
+            head = positions[-1][0]
+            same_main_stage = (
+                st.parallel_group == "main"
+                and head.parallel_group == "main"
+                and st.stage_id == head.stage_id
+            )
+            same_window = (
+                st.parallel_group != "main"
+                and st.parallel_group == head.parallel_group
+            )
+            if same_main_stage or same_window:
+                positions[-1].append(st)
+                continue
+        positions.append([st])
+    return positions
+
+
+def build_ideal_timeline(stages_meta: list[dict]) -> dict:
+    """Reference Gantt payload (issue #8) from the committed durations module.
+
+    Weeks are counted from project start (0). Each bar spans the envelope
+    [fastest start, slowest end]: start_week/min_end_week follow the
+    all-minimums scenario, max_start_week/end_week the all-maximums one.
+    Variants share one y-row and start; a parallel window's rows share the
+    same start and the chain resumes after the window's longest member.
+    Y-rows follow stages.csv order; module-only stages append at the end.
+    """
+    order_ids = [m["stage_id"] for m in stages_meta]
+    label_of = {m["stage_id"]: m["label_en"] for m in stages_meta}
+    module_ids = {s.stage_id for s in IDEAL_TIMELINE}
+    row_ids = [sid for sid in order_ids if sid in module_ids]
+    row_ids += [s.stage_id for s in IDEAL_TIMELINE if s.stage_id not in set(row_ids)]
+    row_of = {sid: i for i, sid in enumerate(row_ids)}
+
+    cur_min = cur_max = 0
+    bars = []
+    for position in _ideal_positions():
+        for st in position:
+            sid = st.stage_id
+            bars.append(
+                {
+                    "stage_id": sid,
+                    "label": label_of.get(sid, sid.replace("_", " ")),
+                    "variant": st.variant,
+                    "row": row_of[sid],
+                    "parallel": st.parallel_group != "main",
+                    "start_week": cur_min,
+                    "min_end_week": cur_min + st.min_weeks,
+                    "max_start_week": cur_max,
+                    "end_week": cur_max + st.max_weeks,
+                    "min_weeks": st.min_weeks,
+                    "max_weeks": st.max_weeks,
+                    "source_file": st.source_file,
+                    "source_url": st.source_url,
+                }
+            )
+        window = position[0].parallel_group != "main"
+        cur_min += (max if window else min)(st.min_weeks for st in position)
+        cur_max += max(st.max_weeks for st in position)
+
+    return {
+        "weeks_axis": list(IDEAL_WEEKS_AXIS),
+        "total_weeks": [cur_min, cur_max],
+        "disclaimer": IDEAL_DISCLAIMER,
+        "rows": [
+            {
+                "row": i,
+                "stage_id": sid,
+                "label": label_of.get(sid, sid.replace("_", " ")),
+            }
+            for i, sid in enumerate(row_ids)
+        ],
+        "bars": bars,
+    }
+
+
 # --- aggregate -----------------------------------------------------------
 
 
@@ -778,4 +875,5 @@ def build_dashboard_data(
         "optimizations": opt,
         "glossary": {"rows": glossary},
         "stages": stage_menu,
+        "ideal_timeline": build_ideal_timeline(stage_menu),
     }

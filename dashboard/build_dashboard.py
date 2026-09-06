@@ -370,6 +370,41 @@ def _render_stage_menu(d: dict) -> str:
     )
 
 
+def _render_ideal_timeline(d: dict) -> str:
+    """PE-4: reference Gantt of the ideal production cycle on the Overview.
+
+    Static benchmark durations (issue #8): ECharts custom-series chart with a
+    no-JS table twin (stage → week range → typical duration → source link).
+    Clicking a bar is routed client-side to the stage page.
+    """
+    it = d.get("ideal_timeline") or {}
+    bars = it.get("bars") or []
+    if not bars:
+        return ""
+    rows = [
+        [
+            _esc(b["label"] + (f" ({b['variant']})" if b["variant"] else "")),
+            f'{b["start_week"]}–{b["end_week"]}',
+            f'{b["min_weeks"]}–{b["max_weeks"]} wks',
+            f'<a href="{_esc(b["source_url"])}" target="_blank" '
+            f'rel="noopener">{_esc(b["source_file"])}</a>',
+        ]
+        for b in bars
+    ]
+    lo, hi = it["total_weeks"]
+    return (
+        "<h3>Ideal production timeline (reference)</h3>"
+        f'<p class="hint">{_esc(it["disclaimer"])}. Weeks are counted from '
+        f"project start on a fixed 0–{it['weeks_axis'][1]} axis; overlapping "
+        "bars run in parallel. Whole cycle envelope: "
+        f"{lo}–{hi} weeks. Sources per stage are linked below.</p>"
+        + _chart("ideal", max(240, 46 * len(it["rows"]) + 70))
+        + "<details><summary>Ideal timeline (no-JS fallback)</summary>"
+        + _table(["Stage", "Weeks (start–end)", "Typical duration", "Source"], rows)
+        + "</details>"
+    )
+
+
 # --- per-tab renderers ----------------------------------------------------
 
 
@@ -450,6 +485,7 @@ def _render_overview(d: dict) -> str:
         + note
         + f'<div class="tiles">{tiles_html}</div>'
         + _render_stage_menu(d)
+        + _render_ideal_timeline(d)
         + "<h3>Money flow: spend → stages → suppliers</h3>"
         + '<p class="hint">Read left to right: each stage\'s spend splits into '
         "the suppliers paid for it — top 10 individually, the rest lumped "
@@ -905,6 +941,66 @@ def render_html(data: dict, generated_from: str) -> str:
         }}),
         links: DATA.overview.sankey.links }}]
     }});
+
+    // Ideal production timeline (reference): custom-series Gantt, weeks 0-26.
+    // Light band = fastest→slowest envelope, solid bar = fastest scenario;
+    // variants (steel/aluminum tooling) overlay on one row, a parallel window
+    // shares start weeks. Clicking a bar opens the stage page.
+    var it = DATA.ideal_timeline;
+    var idealEl = document.getElementById('chart-ideal');
+    if (it && it.bars && it.bars.length && idealEl) {{
+      var stageColor = {{}};
+      stageNames.forEach(function (s, i) {{
+        stageColor[s] = palette[i % palette.length];
+      }});
+      var idealBars = it.bars;
+      var idealChart = echarts.init(idealEl);
+      idealChart.setOption({{
+        tooltip: {{ formatter: function (p) {{ return p.name; }} }},
+        grid: {{ left: 160, right: 30, top: 10, bottom: 30 }},
+        xAxis: {{ type: 'value', min: it.weeks_axis[0], max: it.weeks_axis[1],
+                  name: 'week', interval: 2 }},
+        yAxis: {{ type: 'category', inverse: true,
+                  data: it.rows.map(function (r) {{ return r.label; }}),
+                  axisLabel: {{ fontSize: 11 }} }},
+        series: [{{
+          type: 'custom',
+          encode: {{ x: [1, 3], y: 0 }},
+          data: idealBars.map(function (b) {{
+            var label = b.label + (b.variant ? ' (' + b.variant + ')' : '');
+            return {{
+              value: [b.row, b.start_week, b.min_end_week, b.end_week],
+              name: label + ' · weeks ' + b.start_week + '–' + b.end_week +
+                    ' (typical ' + b.min_weeks + '–' + b.max_weeks + ' wks)'
+            }};
+          }}),
+          renderItem: function (params, api) {{
+            var row = api.value(0);
+            var b = idealBars[params.dataIndex];
+            var color = stageColor[b.stage_id] || '#74b9ff';
+            var s = api.coord([api.value(1), row]);
+            var fast = api.coord([api.value(2), row]);
+            var slow = api.coord([api.value(3), row]);
+            var h = 18;
+            return {{ type: 'group', children: [
+              {{ type: 'rect', transition: ['shape'],
+                 shape: {{ x: s[0], y: s[1] - h / 2,
+                           width: Math.max(slow[0] - s[0], 2), height: h }},
+                 style: {{ fill: color, opacity: 0.3 }} }},
+              {{ type: 'rect', transition: ['shape'],
+                 shape: {{ x: s[0], y: s[1] - h / 4,
+                           width: Math.max(fast[0] - s[0], 2), height: h / 2 }},
+                 style: {{ fill: color }} }}
+            ] }};
+          }}
+        }}]
+      }});
+      idealChart.on('click', function (p) {{
+        var b = idealBars[p.dataIndex];
+        if (b) location.hash = '#/stage/' + b.stage_id;
+      }});
+      charts.push(idealChart);
+    }}
 
     // Cost structure: bars / stacked / treemap / heatmap
     var stageTotals = cs.stages.map(function (r) {{ return r.amount_cny; }});
