@@ -513,6 +513,13 @@ def build_sankey(
     links.sort(key=lambda ln: ln["value"], reverse=True)
 
     total = sum(r["amount_cny"] for r in stages)
+
+    def _share(amount: float) -> float:
+        # denominator is the stage_summary total, which can drift below the
+        # supplier-CSV amounts — clamp like the callout so the page stays
+        # self-consistent
+        return min(round(amount / total * 100, 1), 100.0) if total else 0.0
+
     fallback_rows = [
         {
             "supplier": label_of[s["supplier"]],
@@ -520,7 +527,7 @@ def build_sankey(
                 s["stage_mix"], key=lambda st: s["stage_mix"][st], reverse=True
             ),
             "total_cny": s["amount_cny"],
-            "share_pct": round(s["amount_cny"] / total * 100, 1) if total else 0.0,
+            "share_pct": _share(s["amount_cny"]),
         }
         for s in top_rows
     ]
@@ -535,7 +542,7 @@ def build_sankey(
                     reverse=True,
                 ),
                 "total_cny": others_total,
-                "share_pct": round(others_total / total * 100, 1) if total else 0.0,
+                "share_pct": _share(others_total),
             }
         )
     if unattr:
@@ -547,7 +554,7 @@ def build_sankey(
                     unattr_mix, key=lambda st: unattr_mix[st], reverse=True
                 ),
                 "total_cny": unattr_total,
-                "share_pct": round(unattr_total / total * 100, 1) if total else 0.0,
+                "share_pct": _share(unattr_total),
             }
         )
     return {"nodes": nodes, "links": links, "top_suppliers": fallback_rows}

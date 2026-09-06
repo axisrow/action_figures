@@ -440,6 +440,31 @@ def test_unattributed_share_pct_clamped_to_100(tmp_path):
     assert ua["share_pct"] == 100.0
 
 
+def test_sankey_fallback_share_pct_clamped_to_100(tmp_path):
+    """The no-JS Top suppliers table uses the same drifted denominator as the
+    callout — its shares must clamp identically or the page contradicts
+    itself (review follow-up on PR 12)."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        ["tooling_molds,2,1000.00,100.0"],
+    )
+    write(
+        d / "audit" / "by_supplier_stage.csv",
+        "supplier,stage,month,amount_cny",
+        [
+            "SupA,tooling_molds,2026-01,600.00",
+            ",tooling_molds,2026-02,1300.00",
+        ],
+    )
+    rows = build_dashboard_data(d)["overview"]["sankey"]["top_suppliers"]
+    assert rows[0]["supplier"] == "SupA"
+    assert rows[0]["share_pct"] == 60.0  # honest when below 100
+    assert rows[-1]["supplier"] == "Unattributed"
+    assert rows[-1]["share_pct"] == 100.0  # raw 130% → clamped
+
+
 @pytest.fixture()
 def unattr_sankey_dir(tmp_path) -> Path:
     """12 named suppliers + a blank-supplier bucket bigger than all of them."""
