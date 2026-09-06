@@ -86,6 +86,35 @@ def test_no_match_leaves_supplier_empty():
     assert out.loc[0, "supplier_source"] == "ledger"
 
 
+def test_nan_supplier_cell_stays_nan_never_the_string_nan():
+    # a blank ledger cell may be NaN, not ""; unfilled it must stay NaN —
+    # str() here would create a phantom "nan" counterparty in group-bys
+    df = pd.DataFrame(
+        [{"line_id": "N1", "item": "杂费", "supplier": float("nan"),
+          "amount": 1.0, "stage": "raw_materials"}]
+    )
+    out = apply_attribution(df)
+    assert pd.isna(out.loc[0, "supplier"])
+    assert out.loc[0, "supplier_source"] == "ledger"
+
+
+def test_nan_supplier_cell_filled_by_rule():
+    df = pd.DataFrame(
+        [{"line_id": "N2", "item": "头仔搪胶模费", "supplier": float("nan"),
+          "amount": 1.0, "stage": "tooling_molds"}]
+    )
+    out = apply_attribution(df)
+    assert out.loc[0, "supplier"] == "搪胶"
+    assert out.loc[0, "supplier_source"] == "keyword"
+
+
+def test_named_supplier_cell_kept_verbatim():
+    # named ledger cells are appended unchanged (no str()/strip mangling)
+    df = pd.DataFrame([_row(item="杂费", supplier="Star Tooling Co.")])
+    out = apply_attribution(df)
+    assert out.loc[0, "supplier"] == "Star Tooling Co."
+
+
 # --- exact-name overrides ---------------------------------------------------
 
 def test_override_applies_by_line_id_only_when_supplier_empty(tmp_path):

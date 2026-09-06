@@ -72,6 +72,11 @@ def _empty(value: object) -> str:
     return str(value).strip()
 
 
+def _is_filled(value: object) -> bool:
+    """True when the supplier cell carries a real (non-blank/NaN) name."""
+    return _empty(value) != ""
+
+
 def apply_attribution(
     df: pd.DataFrame,
     overrides: Sequence[Mapping[str, str]] | None = None,
@@ -89,16 +94,18 @@ def apply_attribution(
         for o in (overrides or [])
         if o.get("status") == "applied" and o.get("field") == "supplier"
     }
-    suppliers: list[object] = []  # unfilled rows keep the raw cell (may be NaN)
+    # cells are appended unchanged unless a rule/override fills them, so a
+    # blank stays "" and a NaN stays NaN — never the string "nan"
+    suppliers: list[object] = []
     sources: list[str] = []
     for rec in out.to_dict("records"):
         supplier = rec.get("supplier")
-        source = LEDGER
-        if _empty(supplier):
-            suppliers.append(str(supplier))
-            sources.append(source)
+        if _is_filled(supplier):
+            suppliers.append(supplier)
+            sources.append(LEDGER)
             continue
         filled = ""
+        source = LEDGER
         line_id = str(rec.get("line_id"))
         if line_id in override_map:
             filled, source = override_map[line_id], OVERRIDE
