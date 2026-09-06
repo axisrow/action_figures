@@ -278,3 +278,16 @@ def test_hash_router_and_stage_page_skeleton(html):
     # content slots PE-3 fills in the next sub-issue
     for slot in ("monthly", "daily", "suppliers", "styles"):
         assert f'id="stage-slot-{slot}"' in view
+
+
+def test_hash_router_defaults_to_overview(html):
+    """Back from a stage page to the entry URL with the empty hash fires
+    hashchange with a hash matching neither route — the router must land on
+    the overview tab, not leave a dead stage view with no tab highlighted
+    (review on PR 19)."""
+    router = html.split("function route()", 1)[1].split(
+        "window.addEventListener('hashchange'", 1
+    )[0]
+    # unguarded fallback: any non-stage hash (empty, '#/overview', stray)
+    assert "showTab('overview');" in router
+    assert "location.hash === '#/overview'" not in router

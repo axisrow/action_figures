@@ -1094,7 +1094,10 @@ def render_html(data: dict, generated_from: str) -> str:
       window.scrollTo(0, 0);
       return;
     }}
-    if (location.hash === '#/overview') showTab('overview');
+    // '#/overview', the empty hash (entry URL after Back from a stage page)
+    // and any stray hash all land on the overview tab — the server-rendered
+    // initial state
+    showTab('overview');
   }}
   window.addEventListener('hashchange', route);
   route();
