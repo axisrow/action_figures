@@ -453,7 +453,7 @@ def _render_ideal_timeline(d: dict) -> str:
 
 def _render_data_quality_notes(d: dict) -> str:
     """Data-quality callouts (unclassified / unattributed spend) — shown on
-    the Home screen, where the headline numbers live."""
+    the Cost tab (Home is the stage menu only)."""
     ov = d["overview"]
     note = ""
     uncls = ov.get("unclassified") or {}
@@ -516,13 +516,6 @@ def _render_money_flow(d: dict) -> str:
     )
 
 
-def _render_overview(d: dict) -> str:
-    """Stage menu screen: the production stages and nothing else (EI-1
-    restructure — KPIs/exec summary live on Home, money flow on Cost,
-    ideal timeline on Timelines)."""
-    return _render_stage_menu(d)
-
-
 def _render_cost(d: dict) -> str:
     cs = d["cost_structure"]
     stage_rows = [
@@ -551,6 +544,7 @@ def _render_cost(d: dict) -> str:
     return (
         "<p>Four views of the same numbers: totals, monthly trend, shares and "
         "a month×stage matrix.</p>"
+        + _render_data_quality_notes(d)
         + _render_money_flow(d)
         + "<h3>Total spend by stage</h3>"
         + '<p class="hint">One bar per production stage — taller means more '
@@ -793,7 +787,6 @@ def _render_glossary(d: dict) -> str:
 
 
 TABS = [
-    ("overview", "Overview", _render_overview),
     ("cost", "Cost structure", _render_cost),
     ("timelines", "Product timelines", _render_timelines),
     ("suppliers", "Suppliers", _render_suppliers),
@@ -810,38 +803,10 @@ def _TAB_TITLES() -> dict:
 
 
 def _render_home(d: dict) -> str:
-    """EI-1 Home screen: the one-page answer to 'where does the money go?',
-    large KPI tiles + the two ways in (stage menu / deep dive)."""
-    tiles = d["overview"]["tiles"]
-    ex = d["overview"].get("executive") or {}
-    kpis = "".join(
-        f'<div class="tile kpi"><div class="tile-num">{val}</div>'
-        f'<div class="tile-label">{label}</div></div>'
-        for label, val in [
-            ("Total spend", _fmt_cny(tiles["total_spend_cny"])),
-            ("Expense lines", str(tiles["total_lines"])),
-            ("Styles tracked", str(tiles["num_styles"])),
-            ("Top stage", _label(tiles["top_stage"])),
-        ]
-    )
-    bullets = "".join(
-        f"<li>{_esc(b)}</li>" for b in (ex.get("bullets") or [])[:3]
-    )
-    links = "".join(
-        f'<a class="home-link" href="#/tab/{tid}">{title} →</a>'
-        for tid, title, _fn in TABS[1:]  # stage menu card already covers TABS[0]
-    )
-    return (
-        "<h2>Where does the money go?</h2>"
-        '<p class="lead">One screen with the answer; every number below '
-        "clicks through to the screen that proves it.</p>"
-        f'<div class="tiles kpis">{kpis}</div>'
-        + (f'<ul class="exec">{bullets}</ul>' if bullets else "")
-        + _render_data_quality_notes(d)
-        + '<h3>Start here</h3><div class="home-links">'
-        '<a class="home-link" href="#/tab/overview">Stage menu — how a figure '
-        "is made, stage by stage →</a>" + links + "</div>"
-    )
+    """Home screen IS the stage menu (owner direction 2026-09-06): the
+    production stages in process order and nothing else. Data-quality
+    callouts live on the Cost tab."""
+    return _render_stage_menu(d)
 
 CSS = """
 :root { color-scheme: light;
@@ -863,12 +828,12 @@ CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
        background: var(--bg); color: var(--ink); }
-header { background: var(--ink); color: #fff; padding: 14px 24px; position: sticky;
+header { background: var(--ink); color: #fff; padding: 10px 24px; position: sticky;
          top: 0; z-index: 5; }
 header h1 { margin: 0; font-size: 18px; }
 header .sub { opacity: .7; font-size: 12px; }
 nav#main-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
-               margin-top: 10px; }
+               margin-top: 6px; }
 nav#main-nav > a, nav#main-nav .dd summary { color: #dfe6e9; text-decoration: none;
          padding: 7px 14px; border-radius: 6px; font-size: 14px; cursor: pointer; }
 nav#main-nav > a:hover, nav#main-nav .dd summary:hover { background: #454d50; }
@@ -969,15 +934,15 @@ def render_html(data: dict, generated_from: str) -> str:
             for tid, title, fn in TABS
         )
     )
-    # EI-1 shell nav: Home / Stage menu / Deep dive ▾ (anchors — the hash
-    # router owns screen switching, so nav works without extra JS)
+    # EI-1 shell nav: Home / Deep dive ▾ (anchors — the hash router owns
+    # screen switching, so nav works without extra JS). Home IS the stage
+    # menu, so there is no separate Stage menu entry.
     deep_dive = "".join(
         f"<li><a href=\"#/tab/{tid}\">{title}</a></li>"
-        for tid, title, _fn in TABS[1:]
+        for tid, title, _fn in TABS
     )
     nav_html = (
         '<a href="#/home">Home</a>'
-        '<a href="#/tab/overview">Stage menu</a>'
         '<details class="dd"><summary>Deep dive ▾</summary>'
         f"<ul>{deep_dive}</ul></details>"
     )
@@ -1003,7 +968,7 @@ def render_html(data: dict, generated_from: str) -> str:
 <main>
 {tabs_html}
 <section id="stage-view" class="tab-panel" role="region" aria-label="Stage detail">
-  <p><a class="back" href="#/tab/overview">← Back to overview</a></p>
+  <p><a class="back" href="#/home">← Back to stage menu</a></p>
   <h2 id="stage-title"></h2>
   <p id="stage-desc" class="lead"></p>
   <div id="stage-stats" class="tiles"></div>
@@ -1453,7 +1418,7 @@ def render_html(data: dict, generated_from: str) -> str:
       crumbsRender(
         crumbItems((IA.stage_crumbs || ['Home']).concat(
           [stagesById[m[1]].label_en])),
-        '#/tab/overview');
+        '#/home');
       setNav('');  // stage pages highlight nothing in the top nav
       fillStage(stagesById[m[1]]);
       window.scrollTo(0, 0);

@@ -704,8 +704,8 @@ def build_sankey(
 # --- IA route table (EI-1) --------------------------------------------------
 
 # Deep-dive screens under '#/tab/<id>' (order matches the shell nav).
+# Home IS the stage menu, so there is no overview tab.
 IA_TABS = [
-    "overview",
     "cost",
     "timelines",
     "suppliers",
@@ -715,7 +715,7 @@ IA_TABS = [
 ]
 
 # Old hash addresses keep working: each maps to its new route.
-IA_REDIRECTS = {"#/overview": "#/tab/overview"}
+IA_REDIRECTS = {"#/overview": "#/home"}
 
 
 def _ia_title(tab_id: str, titles: dict[str, str]) -> str:

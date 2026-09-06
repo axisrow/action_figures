@@ -22,9 +22,8 @@ money figures, supplier names or project numbers.
 ## Screen map
 
 ```
-Home (#/home, default)
-├── Stage menu / Process Explorer (#/tab/overview)
-│   └── Stage detail (#/stage/<stage_id>)   ×12 stages
+Home = Stage menu (#/home, default)
+├── Stage detail (#/stage/<stage_id>)   ×12 stages
 └── Deep dive
     ├── Cost structure      (#/tab/cost)
     ├── Product timelines   (#/tab/timelines)
@@ -34,10 +33,10 @@ Home (#/home, default)
     └── Glossary            (#/tab/glossary)
 ```
 
-- **Home** — "Where does the money go?" Large KPI tiles (total spend,
-  lines, styles, top stage) + the top executive bullets + entry links.
-- **Stage menu (Overview)** — "How is a figure made?" The 12 production
-  stages in process order; each entry opens its stage detail page.
+- **Home = Stage menu** — "How is a figure made?" The 10 numbered
+  production stages in process order (admin & unclassified collapsed under
+  "Other"), each entry opening its stage detail page. Nothing else on this
+  screen; data-quality callouts live on Cost structure.
 - **Stage detail** — "What did one stage cost, when, and to whom?"
   Monthly/daily charts, top suppliers/styles, and a not-booked explainer
   plate for stages tracked outside this ledger.
@@ -48,16 +47,16 @@ Home (#/home, default)
 
 | Hash | Screen |
 | --- | --- |
-| `#/home` (or empty / unknown) | Home |
-| `#/tab/<name>` | Deep-dive tab or stage menu (`overview`, `cost`, `timelines`, `suppliers`, `benchmarks`, `optimizations`, `glossary`) |
+| `#/home` (or empty / unknown) | Home — the stage menu |
+| `#/tab/<name>` | Deep-dive tab (`cost`, `timelines`, `suppliers`, `benchmarks`, `optimizations`, `glossary`) |
 | `#/stage/<id>` | Stage detail page |
 
 - The route table ships inside the JSON payload (`ia` section), so nav,
   breadcrumbs and the client-side router render from one source.
 - **Backwards compatibility:** old addresses redirect (via
   `location.replace`, so no dead history entry): `#/overview` →
-  `#/tab/overview`. Old in-page tab links never had hashes; they now map
-  to `#/tab/<name>`.
+  `#/home` (the stage menu lives there now). Old in-page tab links never
+  had hashes; they now map to `#/tab/<name>`.
 - Back/forward browser buttons work (the router listens to `hashchange`).
 
 ## Breadcrumb rules
@@ -66,7 +65,7 @@ Home (#/home, default)
 | --- | --- | --- |
 | Home | `Home` | — (`#/home`) |
 | Tab | `Home › <Tab title>` | `#/home` |
-| Stage detail | `Home › Process › <Stage label>` | `#/tab/overview` |
+| Stage detail | `Home › Process › <Stage label>` | `#/home` |
 
 ## Design tokens
 
@@ -75,8 +74,8 @@ reused by every rule (no raw font sizes/spacing re-declared):
 
 | Token | Value | Used for |
 | --- | --- | --- |
-| `--kpi-size` | 44px (40–48px band) | Home KPI numbers |
-| `--kpi-label-size` | 12px | KPI captions |
+| `--kpi-size` | 44px (40–48px band) | reserved — large KPI numbers (no KPI tiles in the current IA) |
+| `--kpi-label-size` | 12px | reserved — KPI captions |
 | `--tile-num-size` | 24px | regular tile numbers |
 | `--h2-size` / `h3` | 26px / 17px | screen / section headings |
 | `--text-base` / `--text-sm` | 15px / 13.5px | body / hints & tables |

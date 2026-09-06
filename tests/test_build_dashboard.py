@@ -52,11 +52,13 @@ def test_html_embeds_exact_data_payload(html, mock_data):
     assert json.loads(payload) == mock_data
 
 
-def test_html_has_seven_tabs_and_fallback_tables(html):
-    for tab_id in ["overview", "cost", "timelines", "suppliers",
-                   "benchmarks", "optimizations", "glossary"]:
+def test_html_tabs_and_fallback_tables(html):
+    # EI-1 final direction: Home IS the stage menu — no separate overview panel
+    assert 'id="home"' in html
+    assert 'id="overview"' not in html
+    for tab_id in DEEP_DIVE_TABS:
         assert f'id="{tab_id}"' in html
-    assert html.count("<table") >= 7  # no-JS fallbacks + Top suppliers (overview)
+    assert html.count("<table") >= 7  # no-JS fallback twins across screens
     assert 'id="sup-search"' in html  # client-side supplier search
     assert "echarts" in html  # CDN charts
 
@@ -276,7 +278,7 @@ def test_stage_menu_nojs_fallback_table(html):
 def test_hash_router_and_stage_page_skeleton(html):
     assert "addEventListener('hashchange'" in html  # back/forward support
     view = html.split('id="stage-view"', 1)[1].split("</section>", 1)[0]
-    assert "← Back to overview" in view
+    assert "← Back to stage menu" in view
     assert 'id="stage-title"' in view
     assert 'id="stage-desc"' in view
     # content slots PE-3 fills in the next sub-issue
@@ -404,17 +406,17 @@ def test_html_stage_page_renders_avg_line_stat(html):
 
 DEEP_DIVE_TABS = ["cost", "timelines", "suppliers", "benchmarks",
                   "optimizations", "glossary"]
-ALL_TABS = ["overview"] + DEEP_DIVE_TABS
 
 
 def test_payload_has_ia_route_table(mock_data):
     ia = mock_data["ia"]
     assert ia["default_hash"] == "#/home"
     # old addresses keep working via redirects
-    assert ia["redirects"]["#/overview"] == "#/tab/overview"
+    assert ia["redirects"]["#/overview"] == "#/home"
     routes = {r["hash"]: r for r in ia["routes"]}
     assert routes["#/home"]["title"] == "Home"
-    for tid in ALL_TABS:
+    assert "#/tab/overview" not in routes  # Home IS the stage menu now
+    for tid in DEEP_DIVE_TABS:
         assert f"#/tab/{tid}" in routes
     # every screen carries breadcrumbs rooted at Home
     assert all(r["crumbs"][0] == "Home" for r in ia["routes"])
@@ -422,12 +424,12 @@ def test_payload_has_ia_route_table(mock_data):
     assert routes["#/tab/cost"]["title"] == "Cost structure"
 
 
-def test_html_nav_header_home_stage_menu_deep_dive(html):
+def test_html_nav_header_home_deep_dive(html):
     assert 'id="main-nav"' in html
     assert '<a href="#/home">Home</a>' in html
-    # Stage menu entry points at the overview (where the stage list lives)
-    assert '<a href="#/tab/overview">Stage menu</a>' in html
-    # Deep dive ▾ dropdown carries every remaining tab
+    # Home IS the stage menu — a duplicate nav entry would be dead weight
+    assert '<a href="#/tab/overview">Stage menu</a>' not in html
+    # Deep dive ▾ dropdown carries every deep-dive tab
     assert "Deep dive ▾" in html
     dd = html.split("Deep dive ▾", 1)[1].split("</details>", 1)[0]
     for tid in DEEP_DIVE_TABS:
@@ -444,7 +446,7 @@ def test_html_breadcrumbs_and_back_on_every_screen(html):
 def test_html_router_redirects_old_hashes(html):
     """'#/overview' (old default) must redirect, not render as-is."""
     assert "REDIRECTS" in html
-    assert '"#/overview": "#/tab/overview"' in html  # in the payload
+    assert '"#/overview": "#/home"' in html  # in the payload
 
 
 def test_html_router_maps_tab_hashes(html):
@@ -456,15 +458,17 @@ def test_html_router_maps_tab_hashes(html):
 
 
 def test_html_old_tabs_content_unchanged(html):
-    """Old tab panels stay in the DOM with their ids — only routing moves."""
-    for tid in ALL_TABS:
+    """Deep-dive tab panels stay in the DOM with their ids — only routing
+    moved; the overview panel is gone entirely (Home is the stage menu)."""
+    assert 'id="overview"' not in html
+    for tid in DEEP_DIVE_TABS:
         assert f'id="{tid}"' in html
-        assert 'role="tabpanel"' in html
+    assert 'role="tabpanel"' in html
 
 
-def test_html_stage_back_link_points_to_new_overview_route(html):
+def test_html_stage_back_link_points_home(html):
     view = html.split('id="stage-view"', 1)[1].split("</section>", 1)[0]
-    assert 'href="#/tab/overview"' in view
+    assert 'href="#/home"' in view
 
 
 def test_html_design_tokens_present(html):
@@ -481,10 +485,18 @@ def test_html_design_tokens_present(html):
     assert "font-size: var(--kpi-size)" in html
 
 
-def test_home_screen_is_question_led_kpi_landing(html):
+def test_home_screen_is_stage_menu_only(html):
+    """EI-1 final direction (owner, 2026-09-06): Home IS the stage menu and
+    nothing else — data-quality notes live on Cost, money flow on Cost, the
+    ideal timeline on Timelines."""
     home = html.split('id="home"', 1)[1].split("</section>", 1)[0]
-    assert "tile kpi" in home
-    assert "Total spend" in home  # KPI tiles from the overview payload
+    assert 'id="stage-menu"' in home
+    assert 'id="stage-other"' in home
+    assert "Stage menu (no-JS fallback)" in home
+    for absent in ("tile kpi", "exec", "Data quality:", "Start here",
+                   "Where does the money go?", "chart-sankey", "chart-ideal",
+                   'href="#/tab/'):
+        assert absent not in home, absent
 
 
 def test_docs_ia_spec_exists_and_public_safe():
@@ -507,20 +519,3 @@ def test_ia_tabs_match_rendered_tabs():
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     assert IA_TABS == [tid for tid, _title, _fn in bd.TABS]
-
-
-def test_overview_screen_is_stage_menu_only(html):
-    """EI-1 restructure: '#/tab/overview' shows the stage menu and nothing
-    else — KPIs/exec summary live on Home, money flow on Cost, the ideal
-    timeline on Timelines."""
-    section = html.split('id="overview"', 1)[1].split("</section>", 1)[0]
-    assert 'id="stage-menu"' in section
-    for absent in ("chart-sankey", "chart-ideal", "tile kpi", "exec",
-                   "Top optimization opportunities"):
-        assert absent not in section, absent
-
-
-def test_home_links_skip_duplicate_overview(html):
-    home = html.split('id="home"', 1)[1].split("</section>", 1)[0]
-    # one link per destination: the stage-menu card covers #/tab/overview
-    assert home.count('href="#/tab/overview"') == 1
