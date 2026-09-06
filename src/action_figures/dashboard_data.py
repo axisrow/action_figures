@@ -491,7 +491,13 @@ def build_ideal_timeline(stages_meta: list[dict]) -> dict:
     label_of = {m["stage_id"]: m["label_en"] for m in stages_meta}
     module_ids = {s.stage_id for s in IDEAL_TIMELINE}
     row_ids = [sid for sid in order_ids if sid in module_ids]
-    row_ids += [s.stage_id for s in IDEAL_TIMELINE if s.stage_id not in set(row_ids)]
+    # dict.fromkeys: the module tail alone (stages.csv absent) must not
+    # repeat a stage that appears twice there (tooling steel + aluminum)
+    row_ids += list(
+        dict.fromkeys(
+            s.stage_id for s in IDEAL_TIMELINE if s.stage_id not in set(row_ids)
+        )
+    )
     row_of = {sid: i for i, sid in enumerate(row_ids)}
 
     cur_min = cur_max = 0

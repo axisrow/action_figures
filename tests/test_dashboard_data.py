@@ -652,6 +652,20 @@ def test_payload_stages_absent_without_stages_csv(tmp_path):
     assert build_dashboard_data(d)["stages"] == []
 
 
+def test_ideal_timeline_rows_unique_without_stages_csv(tmp_path):
+    """No stages.csv → rows fall back to module order and must not duplicate
+    a stage listed twice in the module (tooling steel + aluminum)."""
+    d = tmp_path / "reports"
+    write(d / "audit" / "stage_summary.csv",
+          "stage,n_lines,amount_cny,share_pct",
+          ["tooling_molds,1,100.00,100.0"])
+    it = build_dashboard_data(d)["ideal_timeline"]
+    row_ids = [r["stage_id"] for r in it["rows"]]
+    assert len(row_ids) == len(set(row_ids)) == 9
+    bars = it["bars"]
+    assert len({b["row"] for b in bars}) == len(row_ids)
+
+
 # --- ideal_timeline payload (PE-4: reference Gantt on the Overview) ------
 
 
