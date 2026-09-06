@@ -1,5 +1,6 @@
 """Tests for the dashboard HTML generator (mock data path + payload fidelity)."""
 
+import copy
 import json
 import sys
 from pathlib import Path
@@ -132,3 +133,72 @@ def test_main_logs_dictionary_status(tmp_path, capsys):
     out2 = tmp_path / "dist2" / "index.html"
     assert bd.main(["--reports", str(reports), "--out", str(out2)]) == 0
     assert "supplier dictionary: missing" in capsys.readouterr().out
+
+
+# --- UX pass 2: headings/hints, Unattributed, gantt notes & sort ---------
+
+
+def test_html_has_no_unknown_label(html):
+    assert "(unknown)" not in html
+
+
+def test_html_every_chart_has_heading_and_hint(html):
+    headings = [
+        "Money flow: spend → stages → suppliers",  # overview sankey
+        "Total spend by stage",  # cost bar
+        "Monthly spend by stage",  # cost stacked
+        "Share of total spend",  # cost treemap
+        "Month × stage heatmap",  # cost heatmap
+        "Production timeline per style",  # gantt
+        "Ours vs market range",  # benchmarks
+    ]
+    for heading in headings:
+        assert f"<h3>{heading}</h3>" in html
+    assert html.count('class="hint"') >= len(headings)  # one hint per chart
+
+
+@pytest.fixture()
+def patched_html(mock_data):
+    """Mock payload with UX-pass-2 fields forced on (notes must show up)."""
+    data = copy.deepcopy(mock_data)
+    data["timelines"]["gantt"] = (data["timelines"]["gantt"] * 10)[:25]
+    data["timelines"]["gantt_truncated"] = True
+    data["timelines"]["gantt_total_styles"] = 95
+    data["timelines"]["unlinked"] = {"n_lines": 12, "amount_cny": 3456.0}
+    ua = {"n_lines": 34, "amount_cny": 118048.0, "share_pct": 31.6}
+    data["suppliers"]["unattributed"] = ua
+    data["overview"]["unattributed"] = ua
+    return bd.render_html(data, "MOCK synthetic data (test)")
+
+
+def test_html_gantt_truncation_note_visible(patched_html):
+    assert "Showing top 25 of 95 styles by spend" in patched_html
+    assert "by_style_timeline.csv" in patched_html
+
+
+def test_html_gantt_unlinked_footnote(patched_html):
+    assert "12 lines / ¥3,456 not linked to a style" in patched_html
+
+
+def test_html_gantt_unlinked_footnote_without_amount(mock_data):
+    data = copy.deepcopy(mock_data)
+    data["timelines"]["unlinked"] = {"n_lines": 7, "amount_cny": 0.0}
+    html2 = bd.render_html(data, "MOCK synthetic data (test)")
+    assert "7 lines not linked to a style" in html2
+
+
+def test_html_gantt_sort_control(html):
+    assert 'id="gantt-sort"' in html
+    assert "By total spend" in html
+    assert "By duration" in html
+
+
+def test_html_unattributed_callout_and_explainer(patched_html):
+    # overview data-quality callout
+    assert "31.6% of spend is unattributed to a supplier" in patched_html
+    # suppliers-tab explainer line
+    assert (
+        "34 rows / ¥118,048 (31.6% of spend) have no supplier recorded "
+        "— lump-sum internal payments" in patched_html
+    )
+    assert "Unattributed" in patched_html

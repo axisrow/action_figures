@@ -122,6 +122,7 @@ def fixture_real_reports(d: Path) -> Path:
     )
     (audit / "by_style_timeline.csv").write_text(
         "style_no,stage,start_date,end_date,n_lines,amount_cny\n"
+        ",tooling_molds,2026-01-01,2026-06-30,5,15000.00\n"
         "AF-1001,tooling_molds,2026-01-05,2026-02-20,4,10000.00\n"
         "AF-1001,painting_printing,2026-02-21,2026-03-10,3,1000.00\n"
         "AF-1002,assembly_processing,2026-01-10,2026-01-25,3,6000.00\n",
@@ -166,12 +167,14 @@ def test_suppliers_real_aggregated_format():
             encoding="utf-8",
         )
         rows = load_suppliers(p)
-    assert rows[0]["supplier"] == "(unknown)"  # blank name, biggest total
-    assert rows[0]["amount_cny"] == 43630.0
-    assert rows[0]["stage_mix"] == {"tooling_molds": 43630.0}
-    assert rows[0]["months"] == ["2026-01", "2026-02"]
-    assert rows[1]["supplier"] == "测试供应商"
-    assert rows[1]["months"] == ["2026-01", "2026-03"]
+    assert rows[0]["supplier"] == "测试供应商"  # biggest NAMED supplier first
+    assert rows[0]["amount_cny"] == 39526.0
+    assert rows[0]["months"] == ["2026-01", "2026-03"]
+    assert rows[-1]["supplier"] == "Unattributed"  # blank pinned last despite ¥43,630
+    assert rows[-1]["amount_cny"] == 43630.0
+    assert rows[-1]["stage_mix"] == {"tooling_molds": 43630.0}
+    assert rows[-1]["months"] == ["2026-01", "2026-02"]
+    assert not any(r["supplier"] == "(unknown)" for r in rows)
 
 
 def test_benchmarks_md_extracts_ranges_and_sources(tmp_path):
@@ -268,6 +271,19 @@ def test_build_dashboard_data_real_formats(tmp_path):
     # style numbers normalized: float-string forms collapse to plain labels
     styles = {g["style_no"] for g in data["timelines"]["gantt"]}
     assert styles == {"AF-1001", "AF-1002"}
+
+    # empty style_no rows never become a bar — they are counted as unlinked
+    assert data["timelines"]["unlinked"] == {"n_lines": 5, "amount_cny": 15000.0}
+    assert data["timelines"]["gantt_total_styles"] == 2
+
+    # blank-supplier bucket: own sankey node, pinned last among suppliers
+    san_names = [n["name"] for n in data["overview"]["sankey"]["nodes"]]
+    assert san_names[-1] == "Unattributed"
+    ua = data["suppliers"]["unattributed"]
+    assert ua["n_lines"] == 13
+    assert ua["amount_cny"] == 43630.0
+    # 43630 of a 20000 stage total = 218.2% raw — clamped, never >100%
+    assert ua["share_pct"] == 100.0
 
     # benchmarks came from md, not csv
     assert data["benchmarks"]["rows"] == []
