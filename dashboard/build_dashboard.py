@@ -77,6 +77,34 @@ MOCK_BY_MONTH_STAGE = """month,stage,amount_cny
 2026-04,logistics_freight,7000.00
 """
 
+MOCK_BY_DAY_STAGE = """date,stage,amount_cny,n_lines
+2026-01-05,tooling_molds,45000.00,18
+2026-01-25,tooling_molds,37000.00,13
+2026-02-08,tooling_molds,38000.00,12
+2026-02-28,tooling_molds,32000.00,10
+2026-03-15,tooling_molds,15000.00,8
+2026-01-06,painting_printing,31000.00,40
+2026-02-11,painting_printing,48000.00,52
+2026-03-09,painting_printing,51000.00,60
+2026-04-12,painting_printing,34000.00,51
+2026-01-08,raw_materials,40000.00,42
+2026-02-09,raw_materials,36000.00,38
+2026-03-10,raw_materials,29000.00,31
+2026-04-08,raw_materials,16000.00,24
+2026-01-12,injection_molding,22000.00,25
+2026-02-14,injection_molding,35000.00,31
+2026-03-16,injection_molding,8000.00,14
+2026-04-09,injection_molding,9000.00,28
+2026-01-14,packaging,9000.00,18
+2026-02-16,packaging,14000.00,22
+2026-03-11,packaging,12000.00,16
+2026-04-10,packaging,12000.00,16
+2026-01-15,logistics_freight,6000.00,12
+2026-02-17,logistics_freight,8000.00,14
+2026-03-12,logistics_freight,7000.00,13
+2026-04-11,logistics_freight,7000.00,14
+"""
+
 MOCK_BY_STYLE_STAGE = """style_no,stage,amount_cny
 AF-1001,tooling_molds,91000.00
 AF-1001,painting_printing,82000.00
@@ -194,6 +222,7 @@ MOCK_FILES = {
     "audit/stage_summary.csv": MOCK_STAGE_SUMMARY,
     "audit/stages.csv": MOCK_STAGES,
     "audit/by_month_stage.csv": MOCK_BY_MONTH_STAGE,
+    "audit/by_day_stage.csv": MOCK_BY_DAY_STAGE,
     "audit/by_style_stage.csv": MOCK_BY_STYLE_STAGE,
     "audit/by_style_timeline.csv": MOCK_BY_STYLE_TIMELINE,
     "audit/by_supplier_stage.csv": MOCK_BY_SUPPLIER_STAGE,
@@ -879,15 +908,17 @@ def render_html(data: dict, generated_from: str) -> str:
   <h2 id="stage-title"></h2>
   <p id="stage-desc" class="lead"></p>
   <div id="stage-stats" class="tiles"></div>
+  <p class="hint">These are payments by date, not the physical production cycle — a bar means the month the invoice was paid, not when the work happened.</p>
+  <p class="lead" id="stage-plate" hidden><strong>Not booked in this expense ledger.</strong> Costs for this stage are tracked outside these spreadsheets (forensic review), so there are no charts to draw here.</p>
   <div class="cards">
     <div class="opt-card" id="stage-slot-monthly"><h4>Spend by month</h4>
-      <p class="hint">Placeholder — the stage-page update adds the chart.</p></div>
-    <div class="opt-card" id="stage-slot-daily"><h4>Spend by day</h4>
-      <p class="hint">Placeholder — the stage-page update adds the chart.</p></div>
+      <div class="chart" id="stage-chart-monthly" style="height:300px"></div></div>
+    <div class="opt-card" id="stage-slot-daily"><h4>Spend by day (7-day average)</h4>
+      <div class="chart" id="stage-chart-daily" style="height:300px"></div></div>
     <div class="opt-card" id="stage-slot-suppliers"><h4>Top suppliers</h4>
-      <p class="hint">Placeholder — the stage-page update adds the table.</p></div>
+      <div id="stage-tbl-suppliers"></div></div>
     <div class="opt-card" id="stage-slot-styles"><h4>Top styles</h4>
-      <p class="hint">Placeholder — the stage-page update adds the table.</p></div>
+      <div id="stage-tbl-styles"></div></div>
   </div>
 </section>
 </main>
@@ -1170,13 +1201,98 @@ def render_html(data: dict, generated_from: str) -> str:
     document.getElementById('stage-title').textContent =
       'Stage ' + s.order + ' — ' + s.label_en;
     document.getElementById('stage-desc').textContent = s.description_en;
+    var page = (DATA.stage_pages || {{}})[s.stage_id] || {{}};
+    var stats = page.stats || {{
+      total_cny: s.amount_cny, share_pct: s.share_pct,
+      n_lines: s.n_lines, avg_line_cny: 0
+    }};
     document.getElementById('stage-stats').innerHTML =
-      '<div class="tile"><div class="tile-num">¥' + Number(s.amount_cny).toLocaleString() +
+      '<div class="tile"><div class="tile-num">¥' + Number(stats.total_cny).toLocaleString() +
       '</div><div class="tile-label">Stage total</div></div>' +
-      '<div class="tile"><div class="tile-num">' + s.share_pct.toFixed(1) +
+      '<div class="tile"><div class="tile-num">' + stats.share_pct.toFixed(1) +
       '%</div><div class="tile-label">Share of spend</div></div>' +
-      '<div class="tile"><div class="tile-num">' + s.n_lines +
-      '</div><div class="tile-label">Expense lines</div></div>';
+      '<div class="tile"><div class="tile-num">' + stats.n_lines +
+      '</div><div class="tile-label">Expense lines</div></div>' +
+      '<div class="tile"><div class="tile-num">¥' + Number(stats.avg_line_cny).toLocaleString() +
+      '</div><div class="tile-label">Avg per line</div></div>';
+
+    // GH#16 verdict stages render an explainer plate instead of charts
+    var plate = document.getElementById('stage-plate');
+    var showCharts = !page.not_booked && typeof echarts !== 'undefined';
+    plate.hidden = !page.not_booked;
+    ['stage-chart-monthly', 'stage-chart-daily'].forEach(function (id) {{
+      document.getElementById(id).hidden = !showCharts;
+    }});
+    if (showCharts) {{
+      if (!stageCharts.m) {{
+        stageCharts.m = echarts.init(document.getElementById('stage-chart-monthly'));
+        stageCharts.d = echarts.init(document.getElementById('stage-chart-daily'));
+        charts.push(stageCharts.m, stageCharts.d);
+      }}
+      stageCharts.m.resize(); stageCharts.d.resize();
+      stageCharts.m.setOption({{
+        tooltip: {{ trigger: 'axis' }},
+        grid: {{ left: 60, right: 20 }},
+        xAxis: {{ type: 'category', data: (page.months || []).map(function (m) {{ return m.month; }}) }},
+        yAxis: {{ type: 'value', name: 'CNY' }},
+        series: [{{ type: 'bar', data: (page.months || []).map(function (m) {{ return m.amount_cny; }}),
+                   itemStyle: {{ color: '#0984e3' }} }}]
+      }}, true);
+      stageCharts.d.setOption(dailyOption(page.days || []), true);
+    }}
+
+    fillStageTable('stage-tbl-suppliers', ['Supplier', 'Total', 'Share'],
+      (page.top_suppliers || []).map(function (r) {{
+        return [r.supplier, '¥' + Number(r.amount_cny).toLocaleString(),
+                r.share_pct.toFixed(1) + '%'];
+      }}));
+    fillStageTable('stage-tbl-styles', ['Style', 'Total', 'Share'],
+      (page.top_styles || []).map(function (r) {{
+        return [r.style_no, '¥' + Number(r.amount_cny).toLocaleString(),
+                r.share_pct.toFixed(1) + '%'];
+      }}));
+  }}
+
+  var stageCharts = {{}};
+  function fillStageTable(id, headers, rows) {{
+    var html = '<table class="fallback"><thead><tr>' +
+      headers.map(function (h) {{ return '<th>' + h + '</th>'; }}).join('') +
+      '</tr></thead><tbody>' +
+      rows.map(function (r) {{
+        return '<tr>' + r.map(function (c) {{ return '<td>' + c + '</td>'; }}).join('') + '</tr>';
+      }}).join('') + '</tbody></table>';
+    document.getElementById(id).innerHTML = rows.length ? html :
+      '<p class="hint">Nothing booked for this stage.</p>';
+  }}
+
+  function dailyOption(days) {{
+    // calendar-fill between the first and last payment date, then a 7-day
+    // moving average over the filled series (ma7)
+    var map = {{}};
+    days.forEach(function (d) {{ map[d.date] = d.amount_cny; }});
+    var dates = [], vals = [], ma = [], win = [];
+    var t = new Date(days[0].date).getTime();
+    var last = new Date(days[days.length - 1].date).getTime();
+    for (; t <= last; t += 86400000) {{
+      var ds = new Date(t).toISOString().slice(0, 10);
+      var v = map[ds] || 0;
+      dates.push(ds); vals.push(v); win.push(v);
+      if (win.length > 7) win.shift();
+      ma.push(Math.round(win.reduce(function (a, b) {{ return a + b; }}, 0) / win.length));
+    }}
+    return {{
+      tooltip: {{ trigger: 'axis' }},
+      legend: {{ bottom: 0 }},
+      grid: {{ left: 60, right: 20, bottom: 40 }},
+      xAxis: {{ type: 'category', data: dates }},
+      yAxis: {{ type: 'value', name: 'CNY' }},
+      series: [
+        {{ name: 'Paid that day', type: 'bar', data: vals,
+           itemStyle: {{ color: '#b2bec3' }} }},
+        {{ name: '7-day average', type: 'line', data: ma, smooth: true,
+           showSymbol: false, lineStyle: {{ width: 2, color: '#0984e3' }} }}
+      ]
+    }};
   }}
 
   function route() {{

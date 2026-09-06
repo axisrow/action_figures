@@ -8,6 +8,7 @@ import pytest
 from action_figures.dashboard_data import (
     build_dashboard_data,
     load_benchmarks,
+    load_by_day_stage,
     load_by_month_stage,
     load_by_style_stage,
     load_by_style_timeline,
@@ -747,3 +748,203 @@ def test_ideal_timeline_payload_is_json_safe(reports_dir):
     import json
 
     json.dumps(build_dashboard_data(reports_dir)["ideal_timeline"])
+
+
+# --- PE-3: stage pages (monthly/daily series, top tables, stats) ----------
+
+
+@pytest.fixture()
+def stage_pages_dir(tmp_path) -> Path:
+    """Three stages: a booked one with full data, packaging (booked but
+    forensically 'not in this ledger', GH#16) and qc_testing (absent from
+    the summary entirely)."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "stages.csv",
+        "stage_id,order,label_en,description_en,zh_keys",
+        [
+            "tooling_molds,2,Tooling & Molds,Steel molds before mass production,开模;模具",
+            "packaging,8,Packaging,Boxes and cartons for the figures,包装;彩盒",
+            "qc_testing,9,QC & Testing,Inspections and lab safety tests,检测;验货",
+        ],
+    )
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        [
+            "tooling_molds,4,10000.00,95.2",
+            "packaging,2,500.00,4.8",
+        ],
+    )
+    write(
+        d / "audit" / "by_month_stage.csv",
+        "month,stage,amount_cny",
+        [
+            "2026-01,tooling_molds,6000.00",
+            "2026-02,tooling_molds,4000.00",
+            "2026-01,packaging,500.00",
+        ],
+    )
+    write(
+        d / "audit" / "by_day_stage.csv",
+        "date,stage,amount_cny,n_lines",
+        [
+            "2026-01-05,tooling_molds,3000.00,2",
+            "2026-01-20,tooling_molds,3000.00,1",
+            "2026-02-01,tooling_molds,4000.00,1",
+            "2026-01-10,packaging,500.00,2",
+        ],
+    )
+    write(
+        d / "audit" / "by_style_stage.csv",
+        "style_no,stage,amount_cny",
+        [
+            "AF-1,tooling_molds,6000.00",
+            "AF-2,tooling_molds,4000.00",
+            "AF-3,packaging,500.00",
+            ",tooling_molds,0.00",
+        ],
+    )
+    write(
+        d / "audit" / "by_supplier_stage.csv",
+        "supplier,stage,amount_cny,n_lines,months_active",
+        [
+            "假供应商甲,tooling_molds,6000.00,3,2026-01;2026-02",
+            "假供应商乙,tooling_molds,4000.00,1,2026-02",
+            ",packaging,500.00,2,2026-01",
+        ],
+    )
+    return d
+
+
+def test_load_by_day_stage(tmp_path):
+    path = write(
+        tmp_path / "by_day_stage.csv",
+        "date,stage,amount_cny,n_lines",
+        ["2026-01-05,tooling_molds,3000.00,2", "2026-01-06,tooling_molds,500.00,1"],
+    )
+    rows = load_by_day_stage(path)
+    assert rows == [
+        {"date": "2026-01-05", "stage": "tooling_molds",
+         "amount_cny": 3000.0, "n_lines": 2},
+        {"date": "2026-01-06", "stage": "tooling_molds",
+         "amount_cny": 500.0, "n_lines": 1},
+    ]
+
+
+def test_load_by_day_stage_missing_file(tmp_path):
+    assert load_by_day_stage(tmp_path / "nope.csv") == []
+
+
+def test_stage_pages_months_and_days_series(stage_pages_dir):
+    page = build_dashboard_data(stage_pages_dir)["stage_pages"]["tooling_molds"]
+    assert page["months"] == [
+        {"month": "2026-01", "amount_cny": 6000.0},
+        {"month": "2026-02", "amount_cny": 4000.0},
+    ]
+    assert page["days"] == [
+        {"date": "2026-01-05", "amount_cny": 3000.0},
+        {"date": "2026-01-20", "amount_cny": 3000.0},
+        {"date": "2026-02-01", "amount_cny": 4000.0},
+    ]
+
+
+def test_stage_pages_stats_header(stage_pages_dir):
+    stats = build_dashboard_data(stage_pages_dir)["stage_pages"]["tooling_molds"]["stats"]
+    assert stats == {
+        "total_cny": 10000.0,
+        "share_pct": 95.2,
+        "n_lines": 4,
+        "avg_line_cny": 2500.0,
+    }
+
+
+def test_stage_pages_top_suppliers_en_plus_zh(stage_pages_dir, tmp_path):
+    dict_path = write(
+        tmp_path / "translation.csv",
+        "zh,en,column_hint,n_occurrences,status",
+        ["假供应商甲,Fake Supplier A,supplier,3,translated"],
+    )
+    page = build_dashboard_data(
+        stage_pages_dir, supplier_translations_path=dict_path
+    )["stage_pages"]["tooling_molds"]
+    assert page["top_suppliers"] == [
+        {"supplier": "Fake Supplier A (假供应商甲)",
+         "amount_cny": 6000.0, "share_pct": 60.0},
+        {"supplier": "假供应商乙", "amount_cny": 4000.0, "share_pct": 40.0},
+    ]
+
+
+def test_stage_pages_top_suppliers_cap_and_unattributed_last(tmp_path):
+    """>10 named suppliers: top-10 kept, Unattributed pinned after them."""
+    d = tmp_path / "reports"
+    write(d / "audit" / "stages.csv",
+          "stage_id,order,label_en,description_en,zh_keys",
+          ["tooling_molds,2,Tooling & Molds,Steel molds before mass production,开模;模具"])
+    write(d / "audit" / "stage_summary.csv",
+          "stage,n_lines,amount_cny,share_pct",
+          ["tooling_molds,12,2200.00,100.0"])
+    rows = [
+        f"假供应商{zh},tooling_molds,{100 - i}.00,1,2026-01"
+        for i, zh in enumerate("甲乙丙丁戊己庚辛壬癸子丑")
+    ]
+    rows.append(",tooling_molds,2000.00,1,2026-01")
+    write(d / "audit" / "by_supplier_stage.csv",
+          "supplier,stage,amount_cny,n_lines,months_active", rows)
+    top = build_dashboard_data(d)["stage_pages"]["tooling_molds"]["top_suppliers"]
+    assert len(top) == 11
+    assert top[-1]["supplier"] == "Unattributed"
+    assert top[-1]["amount_cny"] == 2000.0
+    assert all(top[i]["amount_cny"] >= top[i + 1]["amount_cny"]
+               for i in range(len(top) - 2))
+
+
+def test_stage_pages_top_styles_with_shares(stage_pages_dir):
+    page = build_dashboard_data(stage_pages_dir)["stage_pages"]["tooling_molds"]
+    assert page["top_styles"] == [
+        {"style_no": "AF-1", "amount_cny": 6000.0, "share_pct": 60.0},
+        {"style_no": "AF-2", "amount_cny": 4000.0, "share_pct": 40.0},
+    ]
+
+
+def test_stage_pages_not_booked_plate_stages(stage_pages_dir):
+    """packaging and qc_testing show the GH#16 plate instead of charts,
+    whatever the ledger rows say (packaging does have ¥500 booked)."""
+    pages = build_dashboard_data(stage_pages_dir)["stage_pages"]
+    assert pages["packaging"]["not_booked"] is True
+    assert pages["qc_testing"]["not_booked"] is True
+    assert pages["tooling_molds"]["not_booked"] is False
+
+
+def test_stage_pages_absent_stage_sums_zero(stage_pages_dir):
+    """qc_testing sits in stages.csv but not in stage_summary — its page
+    keeps zero stats instead of disappearing from the menu."""
+    page = build_dashboard_data(stage_pages_dir)["stage_pages"]["qc_testing"]
+    assert page["stats"] == {
+        "total_cny": 0.0, "share_pct": 0.0, "n_lines": 0, "avg_line_cny": 0.0,
+    }
+    assert page["months"] == []
+
+
+def test_stage_pages_payload_matches_source_csvs(stage_pages_dir):
+    """JSON in dist == CSV: per-stage series sums reconcile with the raw
+    audit CSVs, and stage-page totals add up to the dashboard grand total."""
+    data = build_dashboard_data(stage_pages_dir)
+    pages = data["stage_pages"]
+    by_month = load_by_month_stage(stage_pages_dir / "audit" / "by_month_stage.csv")
+    by_day = load_by_day_stage(stage_pages_dir / "audit" / "by_day_stage.csv")
+    for sid, page in pages.items():
+        assert sum(m["amount_cny"] for m in page["months"]) == sum(
+            r["amount_cny"] for r in by_month if r["stage"] == sid
+        )
+        assert sum(m["amount_cny"] for m in page["days"]) == sum(
+            r["amount_cny"] for r in by_day if r["stage"] == sid
+        )
+    assert sum(p["stats"]["total_cny"] for p in pages.values()) == (
+        data["overview"]["tiles"]["total_spend_cny"]
+    )
+
+
+def test_stage_pages_covers_every_menu_stage(stage_pages_dir):
+    data = build_dashboard_data(stage_pages_dir)
+    assert set(data["stage_pages"]) == {s["stage_id"] for s in data["stages"]}

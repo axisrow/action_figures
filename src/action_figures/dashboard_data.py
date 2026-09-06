@@ -125,6 +125,19 @@ def load_by_month_stage(path: Path) -> list[dict]:
     ]
 
 
+def load_by_day_stage(path: Path) -> list[dict]:
+    """audit/by_day_stage.csv (PE-1): date,stage,amount_cny,n_lines."""
+    return [
+        {
+            "date": r["date"],
+            "stage": r["stage"],
+            "amount_cny": _f(r["amount_cny"]),
+            "n_lines": int(r["n_lines"]),
+        }
+        for r in _read_csv(path)
+    ]
+
+
 def load_by_style_stage(path: Path) -> list[dict]:
     return [
         {
@@ -688,6 +701,100 @@ def build_sankey(
     return {"nodes": nodes, "links": links, "top_suppliers": fallback_rows}
 
 
+# --- stage pages (PE-3) ----------------------------------------------------
+
+# Forensic verdict (GH#16): packaging and QC/testing costs are not booked in
+# this expense ledger — their pages show an explainer plate, not charts.
+NOT_BOOKED_STAGES = frozenset({"packaging", "qc_testing"})
+
+STAGE_PAGE_TOP_N = 10
+
+
+def _share_pct(amount: float, total: float) -> float:
+    return round(amount / total * 100, 1) if total else 0.0
+
+
+def build_stage_pages(
+    stage_menu: list[dict],
+    by_month: list[dict],
+    by_day: list[dict],
+    by_style: list[dict],
+    suppliers: list[dict],
+    translations: dict[str, str],
+) -> dict:
+    """Per-stage payload section keyed by stage_id (Process Explorer pages).
+
+    Each page: ``months`` (monthly spend series from by_month_stage),
+    ``days`` (daily series from by_day_stage), ``top_suppliers`` (top-10 by
+    stage amount, EN (zh) labels, Unattributed pinned last),
+    ``top_styles`` (top-10 style_no by amount), ``stats`` (total / share /
+    n_lines / avg per line, from the stage_summary-merged menu row) and
+    ``not_booked`` (GH#16 plate stages render no charts).
+    """
+    pages: dict[str, dict] = {}
+    for meta in stage_menu:
+        sid = meta["stage_id"]
+        total = meta["amount_cny"]
+
+        month_map = {r["month"]: r["amount_cny"] for r in by_month
+                     if r["stage"] == sid and r["amount_cny"]}
+        months = [{"month": m, "amount_cny": month_map[m]}
+                  for m in sorted(month_map)]
+        day_map = {r["date"]: r["amount_cny"] for r in by_day
+                   if r["stage"] == sid and r["amount_cny"]}
+        days = [{"date": d, "amount_cny": day_map[d]} for d in sorted(day_map)]
+
+        named = [(s["supplier"], s["stage_mix"][sid])
+                 for s in suppliers
+                 if s["supplier"] != UNATTRIBUTED and sid in s["stage_mix"]]
+        named.sort(key=lambda t: t[1], reverse=True)
+        top_suppliers = [
+            {
+                "supplier": _supplier_label(zh, translations),
+                "amount_cny": amount,
+                "share_pct": _share_pct(amount, total),
+            }
+            for zh, amount in named[:STAGE_PAGE_TOP_N]
+        ]
+        unattr = [s for s in suppliers if s["supplier"] == UNATTRIBUTED
+                  and sid in s["stage_mix"]]
+        if unattr:
+            amount = unattr[0]["stage_mix"][sid]
+            top_suppliers.append(
+                {"supplier": UNATTRIBUTED, "amount_cny": amount,
+                 "share_pct": _share_pct(amount, total)}
+            )
+
+        style_rows = [r for r in by_style
+                      if r["stage"] == sid and r["style_no"]
+                      and r["amount_cny"]]
+        style_rows.sort(key=lambda r: r["amount_cny"], reverse=True)
+        top_styles = [
+            {
+                "style_no": r["style_no"],
+                "amount_cny": r["amount_cny"],
+                "share_pct": _share_pct(r["amount_cny"], total),
+            }
+            for r in style_rows[:STAGE_PAGE_TOP_N]
+        ]
+
+        n_lines = meta["n_lines"]
+        pages[sid] = {
+            "not_booked": sid in NOT_BOOKED_STAGES,
+            "months": months,
+            "days": days,
+            "top_suppliers": top_suppliers,
+            "top_styles": top_styles,
+            "stats": {
+                "total_cny": total,
+                "share_pct": meta["share_pct"],
+                "n_lines": n_lines,
+                "avg_line_cny": round(total / n_lines, 2) if n_lines else 0.0,
+            },
+        }
+    return pages
+
+
 def build_dashboard_data(
     reports_dir: Path, supplier_translations_path: Path | None = None
 ) -> dict:
@@ -715,6 +822,7 @@ def build_dashboard_data(
             }
         )
     by_month = load_by_month_stage(reports_dir / "audit" / "by_month_stage.csv")
+    by_day = load_by_day_stage(reports_dir / "audit" / "by_day_stage.csv")
     by_style = load_by_style_stage(reports_dir / "audit" / "by_style_stage.csv")
     timeline = load_by_style_timeline(reports_dir / "audit" / "by_style_timeline.csv")
     suppliers = load_suppliers(reports_dir / "audit" / "by_supplier_stage.csv")
@@ -796,6 +904,11 @@ def build_dashboard_data(
 
     # sankey: Spend -> stage -> supplier (top-10 + Others, EN labels when known)
     sankey = build_sankey(suppliers, stages, translations)
+
+    # per-stage Process Explorer pages (PE-3)
+    stage_pages = build_stage_pages(
+        stage_menu, by_month, by_day, by_style, suppliers, translations
+    )
 
     # executive summary: the main takeaways in plain English, one screen
     top3_cards = sorted(opt["cards"], key=lambda c: c["saving_cny"],
@@ -881,5 +994,6 @@ def build_dashboard_data(
         "optimizations": opt,
         "glossary": {"rows": glossary},
         "stages": stage_menu,
+        "stage_pages": stage_pages,
         "ideal_timeline": build_ideal_timeline(stage_menu),
     }
