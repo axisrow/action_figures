@@ -1238,21 +1238,17 @@ def render_html(data: dict, generated_from: str) -> str:
       document.getElementById(id).hidden = !showCharts;
     }});
     if (showCharts) {{
+      var opt = stageChartOption(page);
       if (!stageCharts.m) {{
         stageCharts.m = echarts.init(document.getElementById('stage-chart-monthly'));
         stageCharts.d = echarts.init(document.getElementById('stage-chart-daily'));
         charts.push(stageCharts.m, stageCharts.d);
       }}
+      // re-entry rebinds the whole option (notMerge), never the first
+      // stage's data — and resize re-reads the now-visible container
       stageCharts.m.resize(); stageCharts.d.resize();
-      stageCharts.m.setOption({{
-        tooltip: {{ trigger: 'axis' }},
-        grid: {{ left: 60, right: 20 }},
-        xAxis: {{ type: 'category', data: (page.months || []).map(function (m) {{ return m.month; }}) }},
-        yAxis: {{ type: 'value', name: 'CNY' }},
-        series: [{{ type: 'bar', data: (page.months || []).map(function (m) {{ return m.amount_cny; }}),
-                   itemStyle: {{ color: '#0984e3' }} }}]
-      }}, true);
-      stageCharts.d.setOption(dailyOption(page.days || []), true);
+      stageCharts.m.setOption(opt.monthly, true);
+      stageCharts.d.setOption(opt.daily, true);
     }}
 
     fillStageTable('stage-tbl-suppliers', ['Supplier', 'Total', 'Share'],
@@ -1268,6 +1264,29 @@ def render_html(data: dict, generated_from: str) -> str:
   }}
 
   var stageCharts = {{}};
+
+  // Pure option builder for the stage-page charts (GH#24): months -> bar,
+  // days -> calendar-filled bars + 7-day rolling-average line. Exported on
+  // window so headless tests can exercise it without hash navigation.
+  function stageChartOption(stageData) {{
+    if (stageData.not_booked)
+      return {{ placeholder: true, monthly: null, daily: null }};
+    return {{
+      placeholder: false,
+      monthly: {{
+        tooltip: {{ trigger: 'axis' }},
+        grid: {{ left: 60, right: 20 }},
+        xAxis: {{ type: 'category',
+                  data: (stageData.months || []).map(function (m) {{ return m.month; }}) }},
+        yAxis: {{ type: 'value', name: 'CNY' }},
+        series: [{{ type: 'bar',
+                   data: (stageData.months || []).map(function (m) {{ return m.amount_cny; }}),
+                   itemStyle: {{ color: '#0984e3' }} }}]
+      }},
+      daily: dailyOption(stageData.days || [])
+    }};
+  }}
+  window.__stageChartOption = stageChartOption;
   function fillStageTable(id, headers, rows) {{
     var html = '<table class="fallback"><thead><tr>' +
       headers.map(function (h) {{ return '<th>' + h + '</th>'; }}).join('') +
@@ -1315,11 +1334,13 @@ def render_html(data: dict, generated_from: str) -> str:
   function route() {{
     var m = location.hash.match(/^#\\/stage\\/([A-Za-z0-9_-]+)$/);
     if (m && stagesById[m[1]]) {{
-      fillStage(stagesById[m[1]]);
+      // show the panel BEFORE filling it: echarts.init on a display:none
+      // container produces a 0x0 canvas that nothing ever resizes (GH#24)
       document.querySelectorAll('.tab-panel').forEach(function (p) {{
         p.classList.toggle('active', p.id === 'stage-view');
       }});
       nav.querySelectorAll('button').forEach(function (b) {{ b.classList.remove('active'); }});
+      fillStage(stagesById[m[1]]);
       window.scrollTo(0, 0);
       return;
     }}
