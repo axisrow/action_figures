@@ -34,6 +34,7 @@ def test_mock_data_matches_real_schema(mock_data):
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
+    assert len(mock_data["overview"]["sankey"]["top_suppliers"]) <= 11  # top-10 + Others
     assert len(mock_data["suppliers"]["top"]) == 10
     assert mock_data["timelines"]["gantt"][0]["total_days"] >= \
         mock_data["timelines"]["gantt"][-1]["total_days"]
@@ -50,7 +51,7 @@ def test_html_has_seven_tabs_and_fallback_tables(html):
     for tab_id in ["overview", "cost", "timelines", "suppliers",
                    "benchmarks", "optimizations", "glossary"]:
         assert f'id="{tab_id}"' in html
-    assert html.count("<table") >= 6  # no-JS fallbacks for every data tab
+    assert html.count("<table") >= 7  # no-JS fallbacks + Top suppliers (overview)
     assert 'id="sup-search"' in html  # client-side supplier search
     assert "echarts" in html  # CDN charts
 
@@ -77,3 +78,31 @@ def test_main_writes_dist_index(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     assert text.startswith("<!DOCTYPE html>")
     assert "MOCK synthetic data" in text
+
+
+def test_main_logs_dictionary_status(tmp_path, capsys):
+    """The dictionary path is layout-dependent — the build log must say
+    whether EN supplier labels are active (review note on PR 2)."""
+    reports = tmp_path / "reports"
+    (reports / "audit").mkdir(parents=True)
+    (reports / "audit" / "stage_summary.csv").write_text(
+        "stage,n_lines,amount_cny,share_pct\ns1,1,100.00,100.0\n", encoding="utf-8"
+    )
+    dict_csv = tmp_path / "data" / "dict" / "translation.csv"
+    dict_csv.parent.mkdir(parents=True)
+    dict_csv.write_text(
+        "zh,en,column_hint,n_occurrences,status\n"
+        "假供应商甲,Fake Supplier A,supplier,2,translated\n"
+        "假供应商乙,Fake Supplier B,supplier,1,translated\n"
+        "假动词,Fake Verb,item,9,translated\n",  # non-supplier hint: not counted
+        encoding="utf-8",
+    )
+    out = tmp_path / "dist" / "index.html"
+    assert bd.main(["--reports", str(reports), "--out", str(out)]) == 0
+    assert "supplier dictionary: 2 entries" in capsys.readouterr().out
+
+    # without the dictionary the fallback must be visible, not silent
+    dict_csv.unlink()
+    out2 = tmp_path / "dist2" / "index.html"
+    assert bd.main(["--reports", str(reports), "--out", str(out2)]) == 0
+    assert "supplier dictionary: missing" in capsys.readouterr().out

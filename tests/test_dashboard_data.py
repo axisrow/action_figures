@@ -14,6 +14,7 @@ from action_figures.dashboard_data import (
     load_glossary,
     load_optimizations,
     load_stage_summary,
+    load_supplier_translations,
     load_suppliers,
 )
 
@@ -101,6 +102,36 @@ def reports_dir(tmp_path) -> Path:
     return d
 
 
+# Fake zh supplier names for the sankey Top-N tests — 12 distinct, synthetic.
+SANKEY_SUPPLIERS = [
+    "假供应商甲", "假供应商乙", "假供应商丙", "假供应商丁",
+    "假供应商戊", "假供应商己", "假供应商庚", "假供应商辛",
+    "假供应商壬", "假供应商癸", "假供应商子", "假供应商丑",
+]
+
+
+@pytest.fixture()
+def sankey_dir(tmp_path) -> Path:
+    """12 suppliers with descending amounts: top-10 individual + tail of 2.
+
+    Totals: tooling_molds 7800 + painting_printing 300 = grand total 8100;
+    top-10 sum 7500, Others tail 300 (200 + 100).
+    """
+    d = tmp_path / "reports"
+    amounts = [1300 - 100 * (i + 1) for i in range(12)]  # 1200, 1100, …, 100
+    rows = [
+        f"{zh},tooling_molds,2026-01,{amt:.2f}"
+        for zh, amt in zip(SANKEY_SUPPLIERS, amounts, strict=True)
+    ]
+    rows.append("假供应商甲,painting_printing,2026-02,300.00")
+    write(d / "audit" / "by_supplier_stage.csv",
+          "supplier,stage,month,amount_cny", rows)
+    write(d / "audit" / "stage_summary.csv",
+          "stage,n_lines,amount_cny,share_pct",
+          ["tooling_molds,24,7800.00,96.3", "painting_printing,1,300.00,3.7"])
+    return d
+
+
 # --- individual loaders -------------------------------------------------
 
 
@@ -182,10 +213,27 @@ def test_glossary(reports_dir):
     assert rows[0]["en"] == "Tooling / mold making"
 
 
+def test_load_supplier_translations_filters_supplier_hint(tmp_path):
+    path = write(
+        tmp_path / "translation.csv",
+        "zh,en,column_hint,n_occurrences,status",
+        [
+            "假供应商甲,Fake Supplier A,supplier,2,translated",
+            "假动词,Fake Verb,item,9,translated",
+            "假供应商乙,,supplier,3,untranslated",
+        ],
+    )
+    assert load_supplier_translations(path) == {"假供应商甲": "Fake Supplier A"}
+
+
+def test_load_supplier_translations_missing_file(tmp_path):
+    assert load_supplier_translations(tmp_path / "nope" / "translation.csv") == {}
+
+
 # --- aggregate builder --------------------------------------------------
 
 
-def test_build_dashboard_data_tiles_and_sankey(reports_dir):
+def test_build_dashboard_data_tiles(reports_dir):
     data = build_dashboard_data(reports_dir)
     tiles = data["overview"]["tiles"]
     assert tiles["total_spend_cny"] == 20000.0
@@ -193,12 +241,102 @@ def test_build_dashboard_data_tiles_and_sankey(reports_dir):
     assert tiles["num_styles"] == 2
     assert tiles["top_stage"] == "tooling_molds"
 
-    nodes = [n["name"] for n in data["overview"]["sankey"]["nodes"]]
+
+# --- sankey: Top-N + Others, EN labels, flow invariant -------------------
+
+
+def test_sankey_all_suppliers_individual_below_top_n(reports_dir):
+    data = build_dashboard_data(reports_dir)
+    names = [n["name"] for n in data["overview"]["sankey"]["nodes"]]
+    assert names == [
+        "Spend",
+        "tooling_molds",
+        "painting_printing",
+        "logistics_freight",
+        "SupA",
+        "SupB",
+        "SupC",
+    ]
+    assert not any(n.startswith("Others") for n in names)
     links = data["overview"]["sankey"]["links"]
-    assert "Spend" in nodes and "tooling_molds" in nodes and "SupA" in nodes
-    spend_links = [ln for ln in links if ln["source"] == "Spend"]
-    assert sum(ln["value"] for ln in spend_links) == 20000.0
     assert {"source": "tooling_molds", "target": "SupA", "value": 10000.0} in links
+    assert sum(ln["value"] for ln in links if ln["source"] == "Spend") == 20000.0
+
+
+def test_sankey_top10_individual_and_others_node(sankey_dir):
+    data = build_dashboard_data(sankey_dir)
+    names = [n["name"] for n in data["overview"]["sankey"]["nodes"]]
+    assert names == (
+        ["Spend", "tooling_molds", "painting_printing"]
+        + SANKEY_SUPPLIERS[:10]
+        + ["Others (2 suppliers)"]
+    )
+
+
+def test_sankey_others_bucket_aggregates_tail_links(sankey_dir):
+    links = build_dashboard_data(sankey_dir)["overview"]["sankey"]["links"]
+    others = [ln for ln in links if ln["target"].startswith("Others")]
+    assert others == [
+        {"source": "tooling_molds", "target": "Others (2 suppliers)", "value": 300.0}
+    ]
+    # one aggregated link per stage only — the two tail suppliers are gone
+    assert len([ln for ln in links if ln["target"] in SANKEY_SUPPLIERS[10:]]) == 0
+    values = [ln["value"] for ln in links]
+    assert values == sorted(values, reverse=True)  # sorted by value, desc
+
+
+def test_sankey_flow_conservation(sankey_dir, reports_dir):
+    """Σ sankey links == grand total on both layers (spend→stage, stage→supplier)."""
+    for data in (build_dashboard_data(sankey_dir), build_dashboard_data(reports_dir)):
+        links = data["overview"]["sankey"]["links"]
+        spend_links = sum(ln["value"] for ln in links if ln["source"] == "Spend")
+        leaf_links = sum(ln["value"] for ln in links if ln["source"] != "Spend")
+        total = data["overview"]["tiles"]["total_spend_cny"]
+        assert spend_links == total
+        assert leaf_links == total
+
+
+def test_sankey_english_labels_with_zh_original(sankey_dir, tmp_path):
+    dict_path = write(
+        tmp_path / "translation.csv",
+        "zh,en,column_hint,n_occurrences,status",
+        [
+            "假供应商甲,Fake Supplier A,supplier,2,translated",
+            "假供应商乙,Fake Supplier B,item,1,translated",  # non-supplier hint: ignored
+        ],
+    )
+    data = build_dashboard_data(sankey_dir, supplier_translations_path=dict_path)
+    names = [n["name"] for n in data["overview"]["sankey"]["nodes"]]
+    assert "Fake Supplier A (假供应商甲)" in names  # EN + zh original
+    assert "假供应商丙" in names  # untranslated supplier keeps raw zh
+    assert not any("Fake Supplier B" in n for n in names)  # item-hint rows never map
+    links = data["overview"]["sankey"]["links"]
+    assert {
+        "source": "tooling_molds",
+        "target": "Fake Supplier A (假供应商甲)",
+        "value": 1200.0,
+    } in links
+    # without a dictionary every supplier keeps its raw zh name
+    plain = build_dashboard_data(sankey_dir)["overview"]["sankey"]["nodes"]
+    assert "假供应商甲" in [n["name"] for n in plain]
+    # fallback table rows use the same EN + zh composite label
+    sup_rows = data["overview"]["sankey"]["top_suppliers"]
+    assert sup_rows[0]["supplier"] == "Fake Supplier A (假供应商甲)"
+
+
+def test_sankey_top_suppliers_fallback_rows(sankey_dir):
+    rows = build_dashboard_data(sankey_dir)["overview"]["sankey"]["top_suppliers"]
+    assert len(rows) == 11  # top-10 + Others
+    assert rows[0]["supplier"] == "假供应商甲"
+    assert rows[0]["stages"] == ["tooling_molds", "painting_printing"]
+    assert rows[0]["total_cny"] == 1500.0
+    assert rows[0]["share_pct"] == 18.5
+    others = rows[-1]
+    assert others["supplier"] == "Others (2 suppliers)"
+    assert others["stages"] == ["tooling_molds"]
+    assert others["total_cny"] == 300.0
+    assert others["share_pct"] == 3.7
+    assert sum(r["total_cny"] for r in rows) == 8100.0  # nothing lost in bucketing
 
 
 def test_build_dashboard_data_heatmap_and_gantt(reports_dir):
