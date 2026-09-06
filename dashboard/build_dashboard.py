@@ -625,7 +625,7 @@ def _render_timelines(d: dict) -> str:
         + _render_ideal_timeline(d)
         + "<h3>Production timeline per style</h3>"
         + '<p class="hint">Each row is a style; bars show when every stage '
-        "was paid. Re-sort the rows by total spend or by duration below.</p>"
+        "was paid. To re-sort, open Show details below.</p>"
         + notes
         + '<details id="gantt-sort-toggle"><summary>Show details</summary>'
         + '<div class="filters"><select id="gantt-sort" aria-label="Sort styles by">'

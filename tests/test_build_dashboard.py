@@ -204,6 +204,14 @@ def test_html_gantt_sort_control(html):
     assert "By duration" in html
 
 
+def test_html_gantt_sort_hint_matches_collapsed_ui(html):
+    """EI-5 review: the sort control hides behind a collapsed 'Show details'
+    — the hint must not promise an always-visible control below."""
+    assert "Re-sort the rows" not in html
+    timelines = html.split('id="timelines"', 1)[1].split("</section>", 1)[0]
+    assert "To re-sort, open Show details below." in timelines
+
+
 def test_html_unattributed_callout_and_explainer(patched_html):
     # overview data-quality callout
     assert "31.6% of spend is unattributed to a supplier" in patched_html
@@ -718,10 +726,12 @@ def test_print_mode_hides_interactive_chrome(html):
 def test_print_mode_keeps_summary_content(html):
     """Print keeps what the summary is made of: stage menu, KPI tiles and
     the verdict plates. Only chrome is hidden, never the numbers."""
+    import re
+
+    # capture whole selector lists (wrapped lines included) of every rule
+    # whose block hides its content — not just the line holding the brace
     hidden = " ".join(
-        line.split("{", 1)[0]
-        for line in _print_css(html).splitlines()
-        if "display: none" in line
+        re.findall(r"([^{}]+)\{[^}]*display:\s*none", _print_css(html))
     )
     for keep in (".tiles", ".stage-menu li", "#stage-plate", "table"):
         assert keep not in hidden, keep
