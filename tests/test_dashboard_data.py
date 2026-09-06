@@ -945,6 +945,18 @@ def test_stage_pages_payload_matches_source_csvs(stage_pages_dir):
     )
 
 
+def test_stage_pages_skips_blank_dates(stage_pages_dir):
+    """Rows with no date (real ledger has some) must not reach the day series:
+    an empty '' date sorts first and breaks the chart's date axis."""
+    path = stage_pages_dir / "audit" / "by_day_stage.csv"
+    rows = path.read_text().splitlines()
+    rows.append(",tooling_molds,777.00,1")
+    path.write_text("\n".join(rows) + "\n")
+    page = build_dashboard_data(stage_pages_dir)["stage_pages"]["tooling_molds"]
+    assert all(d["date"] for d in page["days"])
+    assert sum(d["amount_cny"] for d in page["days"]) == 10000.0
+
+
 def test_stage_pages_covers_every_menu_stage(stage_pages_dir):
     data = build_dashboard_data(stage_pages_dir)
     assert set(data["stage_pages"]) == {s["stage_id"] for s in data["stages"]}

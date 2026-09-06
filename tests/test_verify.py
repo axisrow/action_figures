@@ -11,8 +11,10 @@ from action_figures.verify_lib import (
     check_audit_totals,
     check_dashboard_payload,
     check_git_hygiene,
+    check_ideal_timeline,
     check_pkl_vs_manifest,
     check_qty_amount,
+    check_stage_pages,
     check_zh_en_parity,
     format_report,
     run_checks,
@@ -351,6 +353,276 @@ class TestDashboardPayload:
         )
         (dist / "index.html").write_text(html, encoding="utf-8")
         res = check_dashboard_payload(dist / "index.html", tmp_path / "reports")
+        assert res.status == "fail"
+
+
+# ------------------------------------------------------- stage pages (PE-5) ---
+
+
+def write_stage_page_reports(tmp_path):
+    """Synthetic reports + matching payload for the two-stage Process Explorer.
+
+    Stages: design_prototyping (regular) and packaging (GH#16 not-booked
+    plate). All numbers invented; share_pct follows round(amount/total,1).
+    """
+    audit = tmp_path / "reports" / "audit"
+    audit.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"stage": "design_prototyping", "n_lines": 2, "amount_cny": 30.0,
+             "share_pct": 60.0},
+            {"stage": "packaging", "n_lines": 2, "amount_cny": 20.0,
+             "share_pct": 40.0},
+        ]
+    ).to_csv(audit / "stage_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"month": "2026-01", "stage": "design_prototyping", "n_lines": 1,
+             "amount_cny": 20.0},
+            {"month": "2026-02", "stage": "design_prototyping", "n_lines": 1,
+             "amount_cny": 10.0},
+            {"month": "2026-01", "stage": "packaging", "n_lines": 2,
+             "amount_cny": 20.0},
+        ]
+    ).to_csv(audit / "by_month_stage.csv", index=False)
+    pd.DataFrame(
+        [
+            {"date": "2026-01-05", "stage": "design_prototyping",
+             "amount_cny": 12.0, "n_lines": 1},
+            {"date": "2026-01-20", "stage": "design_prototyping",
+             "amount_cny": 8.0, "n_lines": 1},
+            {"date": "2026-02-01", "stage": "packaging", "amount_cny": 20.0,
+             "n_lines": 2},
+        ]
+    ).to_csv(audit / "by_day_stage.csv", index=False)
+    pd.DataFrame(
+        [
+            {"style_no": "AF-1", "stage": "design_prototyping", "n_lines": 1,
+             "amount_cny": 18.0},
+            {"style_no": "AF-2", "stage": "design_prototyping", "n_lines": 1,
+             "amount_cny": 12.0},
+            {"style_no": "AF-1", "stage": "packaging", "n_lines": 2,
+             "amount_cny": 20.0},
+        ]
+    ).to_csv(audit / "by_style_stage.csv", index=False)
+    # real aggregated format; blank supplier = Unattributed
+    pd.DataFrame(
+        [
+            {"supplier": "杭州宏达", "stage": "design_prototyping",
+             "amount_cny": 20.0, "n_lines": 1, "months_active": "2026-01"},
+            {"supplier": "东莞精密", "stage": "design_prototyping",
+             "amount_cny": 10.0, "n_lines": 1, "months_active": "2026-02"},
+            {"supplier": "", "stage": "packaging", "amount_cny": 20.0,
+             "n_lines": 2, "months_active": "2026-01"},
+        ]
+    ).to_csv(audit / "by_supplier_stage.csv", index=False)
+    pd.DataFrame(
+        [
+            {"stage_id": "design_prototyping", "order": 1, "label_en": "Design",
+             "description_en": "d", "zh_keys": "设计"},
+            {"stage_id": "packaging", "order": 8, "label_en": "Packaging",
+             "description_en": "p", "zh_keys": "包装"},
+        ]
+    ).to_csv(audit / "stages.csv", index=False)
+    return stage_pages_payload()
+
+
+def stage_pages_payload():
+    return {
+        "stages": [
+            {"stage_id": "design_prototyping", "order": 1, "label_en": "Design",
+             "description_en": "d", "zh_keys": ["设计"], "service": False,
+             "amount_cny": 30.0, "share_pct": 60.0, "n_lines": 2},
+            {"stage_id": "packaging", "order": 8, "label_en": "Packaging",
+             "description_en": "p", "zh_keys": ["包装"], "service": False,
+             "amount_cny": 20.0, "share_pct": 40.0, "n_lines": 2},
+        ],
+        "stage_pages": {
+            "design_prototyping": {
+                "not_booked": False,
+                "months": [{"month": "2026-01", "amount_cny": 20.0},
+                           {"month": "2026-02", "amount_cny": 10.0}],
+                "days": [{"date": "2026-01-05", "amount_cny": 12.0},
+                         {"date": "2026-01-20", "amount_cny": 8.0}],
+                "top_suppliers": [
+                    {"supplier": "Hangzhou Hongda (杭州宏达)", "amount_cny": 20.0,
+                     "share_pct": 66.7},
+                    {"supplier": "东莞精密", "amount_cny": 10.0,
+                     "share_pct": 33.3},
+                ],
+                "top_styles": [
+                    {"style_no": "AF-1", "amount_cny": 18.0, "share_pct": 60.0},
+                    {"style_no": "AF-2", "amount_cny": 12.0, "share_pct": 40.0},
+                ],
+                "stats": {"total_cny": 30.0, "share_pct": 60.0, "n_lines": 2,
+                          "avg_line_cny": 15.0},
+            },
+            "packaging": {
+                "not_booked": True,
+                "months": [{"month": "2026-01", "amount_cny": 20.0}],
+                "days": [{"date": "2026-02-01", "amount_cny": 20.0}],
+                "top_suppliers": [
+                    {"supplier": "Unattributed", "amount_cny": 20.0,
+                     "share_pct": 100.0},
+                ],
+                "top_styles": [
+                    {"style_no": "AF-1", "amount_cny": 20.0, "share_pct": 100.0},
+                ],
+                "stats": {"total_cny": 20.0, "share_pct": 40.0, "n_lines": 2,
+                          "avg_line_cny": 10.0},
+            },
+        },
+        "ideal_timeline": {
+            "weeks_axis": [0, 26],
+            "total_weeks": [4, 8],
+            "disclaimer": "synthetic",
+            "rows": [{"row": 0, "stage_id": "design_prototyping",
+                      "label": "Design"}],
+            "bars": [
+                {"stage_id": "design_prototyping", "label": "Design",
+                 "variant": "", "row": 0, "parallel": False, "start_week": 0,
+                 "min_end_week": 4, "max_start_week": 0, "end_week": 8,
+                 "min_weeks": 4, "max_weeks": 8,
+                 "source_file": "design_bench.md",
+                 "source_url": "https://example.com/design"},
+            ],
+        },
+    }
+
+
+def write_dist(tmp_path, payload):
+    dist = tmp_path / "dist"
+    dist.mkdir(exist_ok=True)
+    (dist / "index.html").write_text(
+        '<html><script id="dash-data" type="application/json">'
+        + json.dumps(payload) + "</script></html>",
+        encoding="utf-8",
+    )
+    return dist / "index.html"
+
+
+class TestStagePages:
+    def test_matching_payload_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_dist(tmp_path, stage_pages_payload())
+        res = check_stage_pages(dist, tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        res = check_stage_pages(tmp_path / "dist" / "index.html", tmp_path / "reports")
+        assert res.status == "pending"
+
+    def test_missing_reports_pending(self, tmp_path):
+        payload = stage_pages_payload()
+        dist = write_dist(tmp_path, payload)
+        res = check_stage_pages(dist, tmp_path / "reports")
+        assert res.status == "pending"
+
+    def test_no_stage_pages_section_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        del payload["stage_pages"]
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+
+    def test_month_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["design_prototyping"]["months"][0]["amount_cny"] = 99.0
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("months" in d for d in res.details)
+
+    def test_day_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["packaging"]["days"] = []
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("days" in d for d in res.details)
+
+    def test_supplier_amount_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["design_prototyping"]["top_suppliers"][0]["amount_cny"] = 5.0
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("top_suppliers" in d for d in res.details)
+
+    def test_style_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["design_prototyping"]["top_styles"] = []
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("top_styles" in d for d in res.details)
+
+    def test_grand_total_mismatch_fails(self, tmp_path):
+        """Σ page totals must equal the stage_summary grand total."""
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["packaging"]["stats"]["total_cny"] = 25.0
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("grand total" in d for d in res.details)
+
+    def test_stats_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["design_prototyping"]["stats"]["n_lines"] = 7
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("stats" in d for d in res.details)
+
+    def test_not_booked_flag_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["packaging"]["not_booked"] = False
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("not_booked" in d for d in res.details)
+
+    def test_unattributed_label_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = stage_pages_payload()
+        payload["stage_pages"]["packaging"]["top_suppliers"][0]["supplier"] = "甲乙"
+        res = check_stage_pages(write_dist(tmp_path, payload), tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("top_suppliers" in d for d in res.details)
+
+
+class TestIdealTimeline:
+    def test_sources_present_ok(self, tmp_path):
+        payload = stage_pages_payload()
+        res = check_ideal_timeline(write_dist(tmp_path, payload))
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        assert check_ideal_timeline(tmp_path / "dist" / "index.html").status == "pending"
+
+    def test_no_section_fails(self, tmp_path):
+        payload = stage_pages_payload()
+        del payload["ideal_timeline"]
+        res = check_ideal_timeline(write_dist(tmp_path, payload))
+        assert res.status == "fail"
+
+    def test_empty_source_url_fails(self, tmp_path):
+        payload = stage_pages_payload()
+        payload["ideal_timeline"]["bars"][0]["source_url"] = ""
+        res = check_ideal_timeline(write_dist(tmp_path, payload))
+        assert res.status == "fail"
+
+    def test_non_http_source_url_fails(self, tmp_path):
+        payload = stage_pages_payload()
+        payload["ideal_timeline"]["bars"][0]["source_url"] = "example.com/design"
+        res = check_ideal_timeline(write_dist(tmp_path, payload))
+        assert res.status == "fail"
+
+    def test_empty_source_file_fails(self, tmp_path):
+        payload = stage_pages_payload()
+        payload["ideal_timeline"]["bars"][0]["source_file"] = ""
+        res = check_ideal_timeline(write_dist(tmp_path, payload))
         assert res.status == "fail"
 
 
