@@ -221,6 +221,46 @@ def load_supplier_translations(path: Path) -> dict[str, str]:
     }
 
 
+def load_by_supplier_month(reports_dir: Path) -> list[dict]:
+    """Per-supplier monthly payment totals for the supplier cards (GH#28).
+
+    Prefers audit/by_supplier_month.csv (EI-3 export over the real staged
+    ledger); when it is absent and by_supplier_stage.csv still has the
+    legacy per-month layout, the same series derives from those rows —
+    so the mock data path and the pre-export real path both work.
+    """
+    rows = _read_csv(Path(reports_dir) / "audit" / "by_supplier_month.csv")
+    if not rows:
+        stage_rows = _read_csv(
+            Path(reports_dir) / "audit" / "by_supplier_stage.csv"
+        )
+        if stage_rows and "month" in stage_rows[0]:
+            rows = stage_rows
+        else:
+            return []
+    agg: dict[tuple[str, str], float] = {}
+    for r in rows:
+        key = ((r["supplier"].strip() or UNATTRIBUTED), r["month"])
+        agg[key] = agg.get(key, 0.0) + _f(r["amount_cny"])
+    return [
+        {"supplier": name, "month": month, "amount_cny": amount}
+        for (name, month), amount in sorted(agg.items())
+    ]
+
+
+def load_by_supplier_style(path: Path) -> list[dict]:
+    """audit/by_supplier_style.csv -> supplier × style rows for the cards."""
+    return [
+        {
+            "supplier": r["supplier"].strip() or UNATTRIBUTED,
+            "style_no": _norm_style(r["style_no"]),
+            "amount_cny": _f(r["amount_cny"]),
+            "n_lines": int(r["n_lines"]),
+        }
+        for r in _read_csv(path)
+    ]
+
+
 def load_unclassified(path: Path) -> dict:
     """audit/unclassified.csv -> line count + total amount (data-quality note)."""
     rows = _read_csv(path)
@@ -795,6 +835,90 @@ def build_stage_pages(
     return pages
 
 
+# --- supplier pages (EI-3, GH#28) ------------------------------------------
+
+# Forensic verdict (GH#16 lineage): the blank-supplier bucket is not a vendor
+# — its card explains what the money actually is instead of pretending.
+UNATTRIBUTED_FORENSICS = (
+    "No supplier recorded on these lines. Forensic review attributes them to "
+    "lump-sum internal transfers and mold prepayments paid ahead of a named "
+    "vendor — see the audit report before treating them as outsourcing costs."
+)
+
+
+def build_supplier_pages(
+    suppliers: list[dict],
+    by_supplier_month: list[dict],
+    by_supplier_style: list[dict],
+    total_spend: float,
+    translations: dict[str, str],
+) -> dict:
+    """Per-supplier payload section keyed by supplier name (GH#28 cards).
+
+    Every supplier from the catalog (named + ``Unattributed``) gets a page:
+    ``label`` (EN (zh) when the dictionary knows the name), ``stats``
+    (total / share of grand total / months active / expense lines),
+    ``stage_mix`` (stage → amount, desc), ``months`` (monthly payment
+    series), ``top_styles`` (styles served, amount desc) and — for the
+    Unattributed bucket only — the forensic ``forensics`` explainer.
+    """
+    months_by_supplier: dict[str, dict[str, float]] = {}
+    for r in by_supplier_month:
+        months_by_supplier.setdefault(r["supplier"], {})[r["month"]] = (
+            r["amount_cny"]
+        )
+    styles_by_supplier: dict[str, list[dict]] = {}
+    for r in by_supplier_style:
+        styles_by_supplier.setdefault(r["supplier"], []).append(r)
+
+    pages: dict[str, dict] = {}
+    for s in suppliers:
+        name = s["supplier"]
+        is_unattr = name == UNATTRIBUTED
+        month_map = months_by_supplier.get(name, {})
+        styles = sorted(
+            styles_by_supplier.get(name, []),
+            key=lambda r: r["amount_cny"],
+            reverse=True,
+        )
+        pages[name] = {
+            "label": _supplier_label(name, translations),
+            "is_unattributed": is_unattr,
+            "forensics": UNATTRIBUTED_FORENSICS if is_unattr else "",
+            "stats": {
+                "total_cny": s["amount_cny"],
+                # same drifted denominator as the callout (PR 12): clamp
+                "share_pct": min(
+                    round(s["amount_cny"] / total_spend * 100, 1), 100.0
+                )
+                if total_spend
+                else 0.0,
+                "months_active": len(s["months"]),
+                "n_lines": s["n_lines"],
+            },
+            "stage_mix": [
+                {"stage": st, "amount_cny": amount}
+                for st, amount in sorted(
+                    s["stage_mix"].items(), key=lambda kv: kv[1], reverse=True
+                )
+            ],
+            "months": [
+                {"month": m, "amount_cny": month_map[m]}
+                for m in sorted(month_map)
+            ],
+            "top_styles": [
+                {
+                    "style_no": r["style_no"],
+                    "amount_cny": r["amount_cny"],
+                    "n_lines": r["n_lines"],
+                }
+                for r in styles
+                if r["style_no"]
+            ],
+        }
+    return pages
+
+
 def build_dashboard_data(
     reports_dir: Path, supplier_translations_path: Path | None = None
 ) -> dict:
@@ -910,6 +1034,15 @@ def build_dashboard_data(
         stage_menu, by_month, by_day, by_style, suppliers, translations
     )
 
+    # per-supplier card pages (EI-3, GH#28)
+    supplier_pages = build_supplier_pages(
+        suppliers,
+        load_by_supplier_month(reports_dir),
+        load_by_supplier_style(reports_dir / "audit" / "by_supplier_style.csv"),
+        total_spend,
+        translations,
+    )
+
     # executive summary: the main takeaways in plain English, one screen
     top3_cards = sorted(opt["cards"], key=lambda c: c["saving_cny"],
                         reverse=True)[:3]
@@ -995,5 +1128,6 @@ def build_dashboard_data(
         "glossary": {"rows": glossary},
         "stages": stage_menu,
         "stage_pages": stage_pages,
+        "supplier_pages": supplier_pages,
         "ideal_timeline": build_ideal_timeline(stage_menu),
     }

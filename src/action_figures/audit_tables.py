@@ -35,6 +35,37 @@ def by_supplier_stage(df: pd.DataFrame) -> pd.DataFrame:
     return out[["supplier", "stage", "amount_cny", "n_lines", "months_active"]]
 
 
+def by_supplier_month(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate staged lines by supplier × month (GH#28 supplier cards).
+
+    Columns: supplier, month, amount_cny. Rows sorted by month then amount
+    descending. Σ(amount_cny) == Σ(df.amount); blank suppliers stay blank
+    (the dashboard renames them to Unattributed).
+    """
+    out = (
+        df.groupby(["supplier", "month"], dropna=False)
+        .agg(amount_cny=("amount", "sum"))
+        .reset_index()
+        .sort_values(["month", "amount_cny"], ascending=[True, False])
+    )
+    return out[["supplier", "month", "amount_cny"]]
+
+
+def by_supplier_style(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate staged lines by supplier × style (GH#28 supplier cards).
+
+    Columns: supplier, style_no, amount_cny, n_lines. Rows sorted by
+    amount_cny descending. Σ(amount_cny) == Σ(df.amount).
+    """
+    out = (
+        df.groupby(["supplier", "style_no"], dropna=False)
+        .agg(n_lines=("line_id", "count"), amount_cny=("amount", "sum"))
+        .reset_index()
+        .sort_values("amount_cny", ascending=False)
+    )
+    return out[["supplier", "style_no", "amount_cny", "n_lines"]]
+
+
 def _iso_day(value: object) -> str:
     """date/datetime/Timestamp -> 'YYYY-MM-DD'; missing values -> ''."""
     if pd.isna(value):

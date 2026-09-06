@@ -960,3 +960,166 @@ def test_stage_pages_skips_blank_dates(stage_pages_dir):
 def test_stage_pages_covers_every_menu_stage(stage_pages_dir):
     data = build_dashboard_data(stage_pages_dir)
     assert set(data["stage_pages"]) == {s["stage_id"] for s in data["stages"]}
+
+
+# --- EI-3 (GH#28): supplier_pages payload + supplier card sub-screen --------
+
+
+@pytest.fixture()
+def supplier_pages_dir(tmp_path) -> Path:
+    """Two named suppliers (one zh with a dictionary entry) + Unattributed;
+    per-month and per-style splits cover the card's charts and tables."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        ["tooling_molds,5,10000.00,80.0", "painting_printing,3,2500.00,20.0"],
+    )
+    write(
+        d / "audit" / "by_supplier_stage.csv",
+        "supplier,stage,amount_cny,n_lines,months_active",
+        [
+            "假供应商甲,tooling_molds,6000.00,3,2026-01;2026-02",
+            "SupB,tooling_molds,4000.00,1,2026-02",
+            "SupB,painting_printing,2500.00,2,2026-03",
+            ",painting_printing,1000.00,1,2026-01",
+        ],
+    )
+    write(
+        d / "audit" / "by_supplier_month.csv",
+        "supplier,month,amount_cny",
+        [
+            "假供应商甲,2026-01,2000.00",
+            "假供应商甲,2026-02,4000.00",
+            "SupB,2026-02,4000.00",
+            "SupB,2026-03,2500.00",
+            ",2026-01,1000.00",
+        ],
+    )
+    write(
+        d / "audit" / "by_supplier_style.csv",
+        "supplier,style_no,amount_cny,n_lines",
+        [
+            "假供应商甲,AF-1,6000.00,3",
+            "SupB,AF-1,4000.00,1",
+            "SupB,AF-2,2500.00,2",
+            ",AF-2,1000.00,1",
+        ],
+    )
+    return d
+
+
+def test_supplier_pages_covers_every_supplier_bucket(supplier_pages_dir):
+    pages = build_dashboard_data(supplier_pages_dir)["supplier_pages"]
+    assert set(pages) == {"假供应商甲", "SupB", "Unattributed"}
+
+
+def test_supplier_pages_header_stats_and_label(supplier_pages_dir, tmp_path):
+    dict_path = write(
+        tmp_path / "translation.csv",
+        "zh,en,column_hint,n_occurrences,status",
+        ["假供应商甲,Fake Supplier A,supplier,3,translated"],
+    )
+    pages = build_dashboard_data(
+        supplier_pages_dir, supplier_translations_path=dict_path
+    )["supplier_pages"]
+    page = pages["假供应商甲"]
+    assert page["label"] == "Fake Supplier A (假供应商甲)"
+    assert pages["SupB"]["label"] == "SupB"  # untranslated: raw name
+    assert page["stats"] == {
+        "total_cny": 6000.0,
+        "share_pct": 48.0,  # 6000 / 12500, stage_summary denominator
+        "months_active": 2,
+        "n_lines": 3,
+    }
+
+
+def test_supplier_pages_stage_mix_sorted_desc(supplier_pages_dir):
+    mix = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["SupB"]["stage_mix"]
+    assert mix == [
+        {"stage": "tooling_molds", "amount_cny": 4000.0},
+        {"stage": "painting_printing", "amount_cny": 2500.0},
+    ]
+
+
+def test_supplier_pages_monthly_series(supplier_pages_dir):
+    page = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["假供应商甲"]
+    assert page["months"] == [
+        {"month": "2026-01", "amount_cny": 2000.0},
+        {"month": "2026-02", "amount_cny": 4000.0},
+    ]
+
+
+def test_supplier_pages_styles_table(supplier_pages_dir):
+    page = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["SupB"]
+    assert page["top_styles"] == [
+        {"style_no": "AF-1", "amount_cny": 4000.0, "n_lines": 1},
+        {"style_no": "AF-2", "amount_cny": 2500.0, "n_lines": 2},
+    ]
+
+
+def test_supplier_pages_unattributed_forensics_note(supplier_pages_dir):
+    page = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["Unattributed"]
+    assert page["is_unattributed"] is True
+    assert "lump-sum" in page["forensics"]
+    assert "mold prepayment" in page["forensics"]
+    for other in ("假供应商甲", "SupB"):
+        p = build_dashboard_data(supplier_pages_dir)["supplier_pages"][other]
+        assert p["is_unattributed"] is False
+        assert p["forensics"] == ""
+
+
+def test_supplier_pages_share_pct_clamped(supplier_pages_dir):
+    """Drifted denominator (supplier CSV > stage_summary): share clamps at
+    100 like the callout (PR 12 review lineage)."""
+    path = supplier_pages_dir / "audit" / "stage_summary.csv"
+    path.write_text(
+        "stage,n_lines,amount_cny,share_pct\ntooling_molds,1,100.00,100.0\n",
+        encoding="utf-8",
+    )
+    page = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["SupB"]
+    assert page["stats"]["share_pct"] == 100.0
+
+
+def test_supplier_pages_legacy_months_from_stage_csv(tmp_path):
+    """No by_supplier_month.csv + legacy per-month by_supplier_stage rows:
+    the monthly series derives from the same rows (mock data path)."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        ["tooling_molds,2,500.00,100.0"],
+    )
+    write(
+        d / "audit" / "by_supplier_stage.csv",
+        "supplier,stage,month,amount_cny",
+        [
+            "SupA,tooling_molds,2026-01,200.00",
+            "SupA,tooling_molds,2026-02,300.00",
+        ],
+    )
+    page = build_dashboard_data(d)["supplier_pages"]["SupA"]
+    assert page["months"] == [
+        {"month": "2026-01", "amount_cny": 200.0},
+        {"month": "2026-02", "amount_cny": 300.0},
+    ]
+    assert page["top_styles"] == []
+
+
+def test_supplier_pages_json_matches_source_csvs(supplier_pages_dir):
+    """JSON == CSV: card totals/stage mixes/monthly series reconcile with the
+    raw supplier CSVs and nothing is lost or invented (GH#28 acceptance)."""
+    data = build_dashboard_data(supplier_pages_dir)
+    pages = data["supplier_pages"]
+    sup_rows = load_suppliers(supplier_pages_dir / "audit" / "by_supplier_stage.csv")
+    assert sum(p["stats"]["total_cny"] for p in pages.values()) == sum(
+        r["amount_cny"] for r in sup_rows
+    )
+    for name, page in pages.items():
+        row = next(r for r in sup_rows if r["supplier"] == name)
+        assert page["stats"]["total_cny"] == row["amount_cny"]
+        assert sum(m["amount_cny"] for m in page["stage_mix"]) == row["amount_cny"]
+        assert page["stats"]["months_active"] == len(row["months"])
+    months = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["SupB"]["months"]
+    assert sum(m["amount_cny"] for m in months) == 6500.0  # by_supplier_month.csv
+    assert json.loads(json.dumps(pages)) == pages  # JSON-safe
