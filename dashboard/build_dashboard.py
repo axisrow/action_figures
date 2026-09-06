@@ -909,7 +909,7 @@ def render_html(data: dict, generated_from: str) -> str:
   <p id="stage-desc" class="lead"></p>
   <div id="stage-stats" class="tiles"></div>
   <p class="hint">These are payments by date, not the physical production cycle — a bar means the month the invoice was paid, not when the work happened.</p>
-  <p class="lead" id="stage-plate" hidden><strong>Not booked in this expense ledger.</strong> Costs for this stage are tracked outside these spreadsheets (forensic review), so there are no charts to draw here.</p>
+  <p class="lead" id="stage-plate" hidden><strong>Not booked in this expense ledger.</strong> Costs for this stage are tracked outside these spreadsheets (forensic review), so the charts are hidden. Any rows in the tables below are residual entries, not the real cost of this stage.</p>
   <div class="cards">
     <div class="opt-card" id="stage-slot-monthly"><h4>Spend by month</h4>
       <div class="chart" id="stage-chart-monthly" style="height:300px"></div></div>
@@ -1266,6 +1266,9 @@ def render_html(data: dict, generated_from: str) -> str:
   }}
 
   function dailyOption(days) {{
+    // a stage booked in stage_summary but absent from by_day_stage gets an
+    // empty-but-valid option — days[0] must never be dereferenced blindly
+    if (!days.length) return {{ series: [] }};
     // calendar-fill between the first and last payment date, then a 7-day
     // moving average over the filled series (ma7)
     var map = {{}};

@@ -378,6 +378,14 @@ def test_html_stage_page_daily_chart_smooths_with_ma7(html):
     assert "86400000" in html  # calendar day step when filling gaps
 
 
+def test_html_stage_page_daily_chart_guards_empty_days(html):
+    """Stages booked in stage_summary but absent from by_day_stage (mock:
+    design_prototyping) must not crash the page — dailyOption returns an
+    empty-but-valid option instead of dereferencing days[0] (PR 20 review)."""
+    fn = html.split("function dailyOption(", 1)[1].split("\n  }", 1)[0]
+    assert fn.index("if (!days.length)") < fn.index("days[0].date")
+
+
 def test_html_stage_page_header_disclaimer(html):
     assert "payments by date, not the physical production cycle" in html
 
@@ -385,6 +393,9 @@ def test_html_stage_page_header_disclaimer(html):
 def test_html_stage_page_not_booked_plate(html):
     assert "Not booked in this expense ledger" in html
     assert 'id="stage-plate"' in html
+    # the plate must not claim the page is empty while tables show residual
+    # booked rows beneath it (PR 20 review)
+    assert "residual entries" in html
 
 
 def test_html_stage_page_renders_avg_line_stat(html):
