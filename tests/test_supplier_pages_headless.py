@@ -51,7 +51,9 @@ def supplier_names(page) -> list[str]:
 
 def test_supplier_page_opens_from_catalog_click(page):
     page, errors = page
-    page.click('nav button[data-tab="suppliers"]')
+    # EI-1 shell: tabs live at '#/tab/<id>' behind the Deep dive nav
+    page.evaluate("location.hash = '#/tab/suppliers'")
+    page.wait_for_selector("#suppliers.active")
     page.click('.supplier-table a[href^="#/supplier/"]')
     page.wait_for_selector("#supplier-view.active")
     assert page.inner_text("#supplier-title") != ""
@@ -104,7 +106,11 @@ def test_supplier_page_breadcrumbs(page):
         " + encodeURIComponent('Ningbo Tooling Co')"
     )
     page.wait_for_selector("#supplier-view.active")
-    crumbs = page.inner_text("#supplier-crumbs")
-    assert crumbs.startswith("Home › Suppliers ›")
-    assert "Ningbo Tooling Co" in crumbs
+    # EI-1 shell renders the trail in the global #crumbs bar; separators
+    # carry CSS margins, so compare on whitespace-stripped text
+    crumbs = page.evaluate(
+        "document.getElementById('crumbs').textContent.replace(/\\s+/g, '')"
+    )
+    assert crumbs.startswith("Home›Suppliers›")
+    assert "NingboToolingCo" in crumbs
     assert errors == []
