@@ -617,6 +617,16 @@ def test_home_payload_shape(mock_data):
     assert home["stage_cards"] == mock_data["stages"]
 
 
+def test_home_renders_from_payload_stage_cards(mock_data):
+    """The Home screen renders from home.stage_cards (single source), not
+    from the top-level stages section — emptying the payload list empties
+    the menu even though d['stages'] still holds every row (PR 36 review)."""
+    data = copy.deepcopy(mock_data)
+    data["home"]["stage_cards"] = []
+    html2 = bd.render_html(data, "MOCK synthetic data (test)")
+    assert 'id="stage-menu"' not in html2
+
+
 def test_home_payload_deepdive_links_match_shell_nav(mock_data):
     """deepdive_links mirror the shell nav: six deep-dive tabs under
     '#/tab/<id>', no overview (Home IS the stage menu)."""

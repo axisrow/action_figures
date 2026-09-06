@@ -601,11 +601,14 @@ def build_ideal_timeline(stages_meta: list[dict]) -> dict:
 def build_home(stage_menu: list[dict], tab_titles: dict[str, str]) -> dict:
     """Payload section ``home`` (EI-2, owner design pass + EI-1 shell).
 
-    Home is exactly the stage-card menu (the ten production stages + the
-    Other block + no-JS fallback); the KPI row and takeaway cards were
-    dropped by the owner as redundant — data-quality callouts live on
-    Cost structure. ``lead`` is the one-line subtitle, ``deepdive_links``
-    mirror the shell nav (the six deep-dive tabs under '#/tab/<id>').
+    Contents (the payload contract — the rendered layout is the shell's):
+    - ``lead``: one-line subtitle;
+    - ``stage_cards``: the raw stage rows (stages.csv metadata merged with
+      stage_summary) — the Home screen renders from this list; the Other
+      block and the no-JS fallback table are built at render time from
+      the ``service`` flag, they are not separate payload entries;
+    - ``deepdive_links``: the six deep-dive tabs under '#/tab/<id>' with
+      titles from the shell TABS (no overview — Home IS the stage menu).
     """
     return {
         "lead": (

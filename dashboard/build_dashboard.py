@@ -392,10 +392,12 @@ def _stage_menu_item(s: dict) -> str:
     )
 
 
-def _render_stage_menu(d: dict) -> str:
+def _render_stage_menu(menu_stages: list[dict]) -> str:
     """Process Explorer menu: the production stages in process order, the two
-    service buckets collapsed into Other, plus a static no-JS table twin."""
-    menu_stages = d.get("stages") or []
+    service buckets collapsed into Other, plus a static no-JS table twin.
+    ``menu_stages`` is the ``home.stage_cards`` payload — the single source
+    the Home screen renders from."""
+    menu_stages = menu_stages or []
     if not menu_stages:
         return ""
     production = [s for s in menu_stages if not s["service"]]
@@ -838,8 +840,9 @@ def _TAB_TITLES() -> dict:
 def _render_home(d: dict) -> str:
     """Home screen IS the stage menu (owner direction 2026-09-06): the
     production stages in process order and nothing else. Data-quality
-    callouts live on the Cost tab."""
-    return _render_stage_menu(d)
+    callouts live on the Cost tab. Rendered from the ``home.stage_cards``
+    payload — the single source of truth for this screen."""
+    return _render_stage_menu(d["home"]["stage_cards"])
 
 CSS = """
 :root { color-scheme: light;
