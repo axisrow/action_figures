@@ -54,6 +54,11 @@ def test_supplier_page_opens_from_catalog_click(page):
     # EI-1 shell: tabs live at '#/tab/<id>' behind the Deep dive nav
     page.evaluate("location.hash = '#/tab/suppliers'")
     page.wait_for_selector("#suppliers.active")
+    # EI-5: the catalog table hides behind a collapsed "Show details"
+    page.evaluate(
+        "document.querySelector('.supplier-table')"
+        ".closest('details').open = true"
+    )
     page.click('.supplier-table a[href^="#/supplier/"]')
     page.wait_for_selector("#supplier-view.active")
     assert page.inner_text("#supplier-title") != ""

@@ -297,14 +297,14 @@ def test_html_nojs_fallback_full_detail_tables(tmp_path):
     recommendation (what to do, math, risks), benchmark table carries
     ranges + sources with access dates."""
     html = _real_html(tmp_path)
-    opt_table = html.split("Optimizations (no-JS fallback)", 1)[1]
+    opt_table = html.split('id="opt-fallback"', 1)[1]
     opt_table = opt_table.split("</table>", 1)[0]
     assert "What to do" in opt_table and "Risks" in opt_table
     assert "get 2–3 competing quotes" in opt_table
     assert "new shop quality ramp" in opt_table
     assert "15% × ¥59,180" in opt_table
 
-    bench_table = html.split("Benchmarks (no-JS fallback)", 1)[1]
+    bench_table = html.split('id="bench-fallback"', 1)[1]
     bench_table = bench_table.split("</table>", 1)[0]
     assert "2026-09-05" in bench_table
     assert 'href="https://zhihu.com/p/1"' in bench_table
