@@ -21,6 +21,20 @@ Translation status semantics (`data/dict/translation.csv`): `translated`
 translation, consumers fall back to en = zh (reported in
 `reports/translation/gaps.md`).
 
+Attribution application layer (GH#39): `scripts/audit.py` fills empty
+supplier cells left by the ledger in two steps after classification —
+generic zh-keyword rules committed in `src/action_figures/attribution.py`
+(process/channel vocabulary only, e.g. the rotocast 搪胶 and outsourced
+design 画图 patterns), then exact per-line counterparty mappings from the
+gitignored `data/dict/attribution_overrides.csv` (same loader pattern as
+the translation dictionary — real counterparty names never enter the
+repo). A named ledger supplier is never overwritten; every fill is
+provenance-tracked in the staged frames' `supplier_source` column
+(`ledger` / `keyword` / `override`), and `scripts/attribute_audit.py`
+reports each forensic proposal as applied or skipped with a reason in
+`reports/audit/attribution_report.md`.
+
+
 ## Layout
 
 ```

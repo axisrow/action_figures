@@ -37,6 +37,7 @@ GOLDEN_CASES = [
     ("开模定金", "", "", "", "tooling_molds"),
     ("线割冲模具", "", "", "", "tooling_molds"),
     ("压铸开模", "", "", "", "tooling_molds"),
+    ("样例塑胶模定金", "", "", "", "tooling_molds"),  # 塑胶模 beats raw 材料 (GH#39)
     # injection molding / cast parts
     ("鞋底啤货", "", "", "", "injection_molding"),
     ("注塑加工", "", "", "", "injection_molding"),
