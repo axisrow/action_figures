@@ -257,6 +257,13 @@ def test_stage_menu_amounts_match_stage_summary(html):
     assert "¥182,000 · 28.4%" in item
 
 
+def test_stage_menu_hover_highlights_whole_card(html):
+    """Hovering a menu entry must highlight the whole card background, not
+    just the stage title (owner feedback)."""
+    assert ".stage-menu li:hover" in html
+    assert ".stage-menu li:hover { background:" in html
+
+
 def test_service_stages_collapsed_into_other(html):
     assert '<details id="stage-other">' in html  # no `open` attribute — collapsed
     other = html.split('id="stage-other"', 1)[1].split("</details>", 1)[0]

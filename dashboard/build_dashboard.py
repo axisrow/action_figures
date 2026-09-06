@@ -905,6 +905,8 @@ details summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 .stage-menu { list-style: none; margin: 10px 0; padding: 0; }
 .stage-menu li { background: var(--card-bg); border-radius: var(--card-radius);
                  margin: 8px 0; box-shadow: var(--card-shadow); padding: 10px 14px; }
+/* hover highlights the whole card, not just the title (owner feedback) */
+.stage-menu li:hover { background: rgba(9, 132, 227, 0.06); }
 .stage-link { display: flex; align-items: center; gap: 10px; text-decoration: none;
               color: var(--ink); font-weight: 600; }
 .stage-link:hover .stage-name { color: var(--accent); }
