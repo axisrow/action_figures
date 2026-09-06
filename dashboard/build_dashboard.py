@@ -309,6 +309,14 @@ def _render_overview(d: dict) -> str:
             f"({_fmt_cny(uncls['amount_cny'])}) could not be classified into "
             "a production stage — see the audit report.</p>"
         )
+    ua = ov.get("unattributed") or {}
+    if ua.get("n_lines"):
+        note += (
+            f'<p class="lead">Data quality: {ua["share_pct"]:.1f}% of spend is '
+            "unattributed to a supplier "
+            f"({_fmt_cny(ua['amount_cny'])} across {ua['n_lines']} lines) — "
+            "shown as Unattributed everywhere.</p>"
+        )
     cards = "".join(
         f'<div class="opt-card"><h4>{_esc(c["title"])}</h4>'
         f'<div class="saving">saves ~{_fmt_cny(c["saving_cny"])}</div>'
@@ -349,6 +357,9 @@ def _render_overview(d: dict) -> str:
         + note
         + f'<div class="tiles">{tiles_html}</div>'
         + "<h3>Money flow: spend → stages → suppliers</h3>"
+        + '<p class="hint">Read left to right: each stage\'s spend splits into '
+        "the suppliers paid for it — top 10 individually, the rest lumped "
+        "into Others.</p>"
         + _chart("sankey", 640)
         + "<details open><summary>Tables (no-JS fallback)</summary>"
         + fallback
@@ -384,11 +395,23 @@ def _render_cost(d: dict) -> str:
         for m in cs["months"]
     ]
     return (
-        "<p>Three views of the same numbers: bars by stage, stacked by month, "
-        "treemap share and a month×stage heatmap.</p>"
+        "<p>Four views of the same numbers: totals, monthly trend, shares and "
+        "a month×stage matrix.</p>"
+        + "<h3>Total spend by stage</h3>"
+        + '<p class="hint">One bar per production stage — taller means more '
+        "spend over the whole period.</p>"
         + _chart("bar")
+        + "<h3>Monthly spend by stage</h3>"
+        + '<p class="hint">Each column is one month, split by stage — watch '
+        "the mix shift over time.</p>"
         + _chart("stack")
+        + "<h3>Share of total spend</h3>"
+        + '<p class="hint">Each block\'s area is that stage\'s slice of the '
+        "total.</p>"
         + _chart("treemap")
+        + "<h3>Month × stage heatmap</h3>"
+        + '<p class="hint">Darker cells mark the months where a stage cost '
+        "the most.</p>"
         + _chart("heatmap")
         + "<details open><summary>Tables (no-JS fallback)</summary>"
         + _table(["Stage", "Total", "Share", "Lines"], stage_rows)
@@ -398,24 +421,38 @@ def _render_cost(d: dict) -> str:
 
 
 def _render_timelines(d: dict) -> str:
+    tl = d["timelines"]
     rows = []
-    for g in d["timelines"]["gantt"]:
+    for g in tl["gantt"]:
         stages = " → ".join(
             f'{_label(s["stage"])} ({s["start_date"]}..{s["end_date"]})'
             for s in g["stages"]
         )
         rows.append([g["style_no"], str(g["total_days"]), stages])
-    note = ""
-    if d["timelines"].get("gantt_truncated"):
-        note = (
-            '<p class="lead">Showing the 25 longest cycles; shorter styles are '
-            "in the audit CSVs.</p>"
+    notes = ""
+    if tl.get("gantt_truncated"):
+        notes += (
+            f'<p class="lead">Showing top {len(tl["gantt"])} of '
+            f'{tl.get("gantt_total_styles", len(tl["gantt"]))} styles by spend '
+            "— full list in by_style_timeline.csv.</p>"
+        )
+    un = tl.get("unlinked") or {}
+    if un.get("n_lines"):
+        amount = f" / {_fmt_cny(un['amount_cny'])}" if un["amount_cny"] else ""
+        notes += (
+            f'<p class="lead">{un["n_lines"]} lines{amount} not linked to a '
+            "style — excluded from the chart above.</p>"
         )
     return (
-        "<p>Stage bars per style, drawn from payment dates; styles sorted by "
-        "total span (longest first).</p>"
-        + note
-        + _chart("gantt", max(360, 60 * len(d["timelines"]["gantt"])))
+        "<p>When each style moved through production, drawn from payment dates.</p>"
+        + "<h3>Production timeline per style</h3>"
+        + '<p class="hint">Each row is a style; bars show when every stage '
+        "was paid. Re-sort the rows by total spend or by duration below.</p>"
+        + notes
+        + '<div class="filters"><select id="gantt-sort" aria-label="Sort styles by">'
+        '<option value="spend">By total spend</option>'
+        '<option value="duration">By duration</option></select></div>'
+        + _chart("gantt", max(360, 60 * len(tl["gantt"])))
         + "<details open><summary>Table (no-JS fallback)</summary>"
         + _table(["Style", "Span (days)", "Stages"], rows)
         + "</details>"
@@ -424,6 +461,16 @@ def _render_timelines(d: dict) -> str:
 
 def _render_suppliers(d: dict) -> str:
     sup = d["suppliers"]
+    ua = sup.get("unattributed") or {}
+    explainer = ""
+    if ua.get("n_lines"):
+        amount = f" / {_fmt_cny(ua['amount_cny'])}" if ua["amount_cny"] else ""
+        explainer = (
+            f'<p class="lead">{ua["n_lines"]} rows{amount} '
+            f'({ua["share_pct"]:.1f}% of spend) have no supplier recorded '
+            "— lump-sum internal payments. They are shown as Unattributed "
+            "and pinned last.</p>"
+        )
     rows = [
         [
             s["supplier"],
@@ -456,7 +503,8 @@ def _render_suppliers(d: dict) -> str:
     return (
         "<p>Full supplier directory with client-side search (no server needed). "
         "Top-10 cards show each supplier's stage mix.</p>"
-        '<div class="filters">'
+        + explainer
+        + '<div class="filters">'
         '<input id="sup-search" type="search" placeholder="Search supplier…" '
         'aria-label="Search supplier">'
         '<select id="sup-stage" aria-label="Filter by stage">'
@@ -496,6 +544,9 @@ def _render_benchmarks(d: dict) -> str:
             for r in bm["rows"]
         ]
         parts += [
+            "<h3>Ours vs market range</h3>"
+            '<p class="hint">Purple bars are our values; green brackets show '
+            "the market range — a bar inside its bracket is within market.</p>",
             _chart("bench", 360),
             _table(["Stage", "Metric", "Ours", "Market range", "Unit", "Source",
                     "Verdict"], rows),
@@ -613,6 +664,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; }
 .tab-panel.active { display: block; }
 h2 { margin: 8px 0 12px; } h3 { margin: 22px 0 8px; }
 .lead { color: #636e72; }
+.hint { color: #636e72; font-size: 13.5px; margin: 4px 0 8px; }
 .exec { background: #fff; border-left: 4px solid #6c5ce7; border-radius: 8px;
         padding: 14px 20px; margin: 10px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
 .exec li { margin: 6px 0; }
@@ -779,14 +831,8 @@ def render_html(data: dict, generated_from: str) -> str:
         label: {{ show: true, formatter: function (p) {{ return p.value[2] ? Math.round(p.value[2]/1000) + 'k' : ''; }} }} }}]
     }});
 
-    // Gantt: custom series, one row per style
-    var g = DATA.timelines.gantt;
-    var start = Math.min.apply(null, g.flatMap(function (row) {{
-      return row.stages.map(function (s) {{ return +new Date(s.start_date); }});
-    }}));
-    var end = Math.max.apply(null, g.flatMap(function (row) {{
-      return row.stages.map(function (s) {{ return +new Date(s.end_date); }});
-    }}));
+    // Gantt: custom series, one row per style; re-sortable by spend/duration
+    var ganttRows = DATA.timelines.gantt;
     var renderGantt = {{ type: 'custom', renderItem: function (params, api) {{
       var yIdx = api.value(0), s = +new Date(api.value(1)), e = +new Date(api.value(2));
       var ptS = api.coord([s, yIdx]), ptE = api.coord([e, yIdx]);
@@ -795,28 +841,48 @@ def render_html(data: dict, generated_from: str) -> str:
         style: {{ fill: api.visual('color') }} }};
       return {{ type: 'group', children: [rect] }};
     }}}};
-    mk('gantt', {{
-      tooltip: {{ formatter: function (p) {{
-        return p.name + '<br>' + new Date(p.value[1]).toISOString().slice(0,10)
-          + ' → ' + new Date(p.value[2]).toISOString().slice(0,10);
-      }} }},
-      grid: {{ left: 90, right: 20 }},
-      xAxis: {{ type: 'time', min: start, max: end }},
-      yAxis: {{ type: 'category', data: g.map(function (r) {{ return r.style_no; }}) }},
-      series: stageNames.map(function (st, i) {{
-        return Object.assign({{}}, renderGantt, {{
-          name: labelMap[st] || st, color: palette[i % palette.length],
-          encode: {{ x: [1, 2], y: 0 }},
-          data: g.flatMap(function (row, ri) {{
-            return row.stages.filter(function (s) {{ return s.stage === st; }})
-              .map(function (s) {{
-                return {{ value: [ri, s.start_date, s.end_date, row.style_no + ' ' + (labelMap[st]||st)],
-                         name: row.style_no + ' · ' + (labelMap[st]||st) }};
-              }});
-          }})
-        }});
-      }})
-    }});
+    function ganttOption(rows) {{
+      var start = Math.min.apply(null, rows.flatMap(function (row) {{
+        return row.stages.map(function (s) {{ return +new Date(s.start_date); }});
+      }}));
+      var end = Math.max.apply(null, rows.flatMap(function (row) {{
+        return row.stages.map(function (s) {{ return +new Date(s.end_date); }});
+      }}));
+      return {{
+        tooltip: {{ formatter: function (p) {{
+          return p.name + '<br>' + new Date(p.value[1]).toISOString().slice(0,10)
+            + ' → ' + new Date(p.value[2]).toISOString().slice(0,10);
+        }} }},
+        grid: {{ left: 90, right: 20 }},
+        xAxis: {{ type: 'time', min: start, max: end }},
+        yAxis: {{ type: 'category', data: rows.map(function (r) {{ return r.style_no; }}) }},
+        series: stageNames.map(function (st, i) {{
+          return Object.assign({{}}, renderGantt, {{
+            name: labelMap[st] || st, color: palette[i % palette.length],
+            encode: {{ x: [1, 2], y: 0 }},
+            data: rows.flatMap(function (row, ri) {{
+              return row.stages.filter(function (s) {{ return s.stage === st; }})
+                .map(function (s) {{
+                  return {{ value: [ri, s.start_date, s.end_date, row.style_no + ' ' + (labelMap[st]||st)],
+                           name: row.style_no + ' · ' + (labelMap[st]||st) }};
+                }});
+            }})
+          }});
+        }})
+      }};
+    }}
+    var ganttEl = document.getElementById('chart-gantt');
+    if (ganttEl) {{
+      var ganttChart = echarts.init(ganttEl);
+      ganttChart.setOption(ganttOption(ganttRows));
+      charts.push(ganttChart);
+      var sortSel = document.getElementById('gantt-sort');
+      if (sortSel) sortSel.addEventListener('change', function () {{
+        var key = this.value === 'duration' ? 'total_days' : 'total_cny';
+        var sorted = ganttRows.slice().sort(function (a, b) {{ return b[key] - a[key]; }});
+        ganttChart.setOption(ganttOption(sorted), {{ notMerge: true }});
+      }});
+    }}
 
     // Benchmarks: ours vs market range (only when CSV rows exist)
     var bm = DATA.benchmarks.rows || [];

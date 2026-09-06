@@ -363,3 +363,171 @@ def test_build_dashboard_data_top_suppliers_and_sections(reports_dir):
 def test_build_dashboard_data_json_roundtrip(reports_dir):
     data = build_dashboard_data(reports_dir)
     assert json.loads(json.dumps(data)) == data  # plain JSON-safe types only
+
+
+# --- UX pass 2: Unattributed supplier, gantt empty styles, truncation ----
+
+
+@pytest.fixture()
+def unattr_dir(tmp_path) -> Path:
+    """Blank-supplier rows outweigh every named supplier — pinned last anyway."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        ["tooling_molds,3,5000.00,62.5", "painting_printing,3,3000.00,37.5"],
+    )
+    write(
+        d / "audit" / "by_supplier_stage.csv",
+        "supplier,stage,month,amount_cny",
+        [
+            "SupA,tooling_molds,2026-01,1200.00",
+            "SupB,painting_printing,2026-01,800.00",
+            ",tooling_molds,2026-02,2500.00",
+            ",painting_printing,2026-02,1500.00",
+        ],
+    )
+    return d
+
+
+def test_suppliers_unattributed_renamed_and_pinned_last(unattr_dir):
+    suppliers = load_suppliers(unattr_dir / "audit" / "by_supplier_stage.csv")
+    assert [s["supplier"] for s in suppliers] == [
+        "SupA",
+        "SupB",
+        "Unattributed",
+    ]
+    assert suppliers[-1]["amount_cny"] == 4000.0  # biggest total, still last
+    assert suppliers[-1]["stage_mix"] == {
+        "tooling_molds": 2500.0,
+        "painting_printing": 1500.0,
+    }
+
+
+def test_unattributed_stats_in_payload(unattr_dir):
+    data = build_dashboard_data(unattr_dir)
+    expected = {"n_lines": 2, "amount_cny": 4000.0, "share_pct": 50.0}
+    assert data["suppliers"]["unattributed"] == expected
+    assert data["overview"]["unattributed"] == expected
+
+
+def test_unattributed_absent_without_blank_rows(reports_dir):
+    data = build_dashboard_data(reports_dir)
+    assert data["suppliers"]["unattributed"] is None
+    assert data["overview"]["unattributed"] is None
+
+
+@pytest.fixture()
+def unattr_sankey_dir(tmp_path) -> Path:
+    """12 named suppliers + a blank-supplier bucket bigger than all of them."""
+    d = tmp_path / "reports"
+    amounts = [1300 - 100 * (i + 1) for i in range(12)]  # 1200, 1100, …, 100
+    rows = [
+        f"{zh},tooling_molds,2026-01,{amt:.2f}"
+        for zh, amt in zip(SANKEY_SUPPLIERS, amounts, strict=True)
+    ]
+    rows.append("假供应商甲,painting_printing,2026-02,300.00")
+    rows.append(",tooling_molds,2026-01,9999.00")
+    write(d / "audit" / "by_supplier_stage.csv",
+          "supplier,stage,month,amount_cny", rows)
+    write(d / "audit" / "stage_summary.csv",
+          "stage,n_lines,amount_cny,share_pct",
+          ["tooling_molds,25,17799.00,98.3", "painting_printing,1,300.00,1.7"])
+    return d
+
+
+def test_sankey_unattributed_own_node_pinned_last(unattr_sankey_dir):
+    data = build_dashboard_data(unattr_sankey_dir)
+    san = data["overview"]["sankey"]
+    names = [n["name"] for n in san["nodes"]]
+    assert names[-1] == "Unattributed"  # own node, last — never inside Others
+    assert names[-2] == "Others (2 suppliers)"
+    assert not any(n == "(unknown)" for n in names)
+    # bucketing ignores the blank supplier: Others keeps only the named tail
+    others = [ln for ln in san["links"] if ln["target"].startswith("Others")]
+    assert others == [
+        {"source": "tooling_molds", "target": "Others (2 suppliers)", "value": 300.0}
+    ]
+    # flow conservation with the unattributed node in play
+    total = data["overview"]["tiles"]["total_spend_cny"]
+    spend = sum(ln["value"] for ln in san["links"] if ln["source"] == "Spend")
+    leaf = sum(ln["value"] for ln in san["links"] if ln["source"] != "Spend")
+    assert spend == leaf == total
+    rows = san["top_suppliers"]
+    assert len(rows) == 12  # top-10 + Others + Unattributed
+    assert rows[-1]["supplier"] == "Unattributed"
+    assert rows[-1]["total_cny"] == 9999.0
+
+
+@pytest.fixture()
+def gantt_dir(tmp_path) -> Path:
+    """Real-format timeline: an empty style_no row with the longest span and
+    the biggest amount must not become a bar."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "by_style_timeline.csv",
+        "style_no,stage,start_date,end_date,n_lines,amount_cny",
+        [
+            ",tooling_molds,2026-01-01,2026-06-30,3,5000.00",
+            "AF-1,tooling_molds,2026-03-01,2026-03-10,2,3000.00",
+            "AF-2,assembly_processing,2026-02-01,2026-02-28,1,1200.00",
+        ],
+    )
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        ["tooling_molds,5,8000.00,87.0", "assembly_processing,1,1200.00,13.0"],
+    )
+    return d
+
+
+def test_gantt_excludes_empty_style_and_reports_unlinked(gantt_dir):
+    data = build_dashboard_data(gantt_dir)
+    tl = data["timelines"]
+    assert [g["style_no"] for g in tl["gantt"]] == ["AF-1", "AF-2"]  # spend desc
+    assert tl["unlinked"] == {"n_lines": 3, "amount_cny": 5000.0}
+    assert tl["gantt_total_styles"] == 2
+    assert tl["gantt_truncated"] is False
+    by_style = {g["style_no"]: g for g in tl["gantt"]}
+    assert by_style["AF-1"]["total_days"] == 10  # attributed rows only
+    assert by_style["AF-1"]["total_cny"] == 3000.0
+    assert by_style["AF-2"]["total_days"] == 28
+    assert by_style["AF-2"]["total_cny"] == 1200.0
+
+
+def test_gantt_legacy_rows_default_lines_and_amount(tmp_path):
+    """Legacy 4-column timeline: n_lines/amount_cny default to 1/0.0."""
+    path = write(
+        tmp_path / "by_style_timeline.csv",
+        "style_no,stage,start_date,end_date",
+        [
+            ",tooling_molds,2026-01-01,2026-02-01",
+            "AF-9,painting_printing,2026-01-05,2026-01-09",
+        ],
+    )
+    rows = load_by_style_timeline(path)
+    assert rows[0] == {
+        "style_no": "",
+        "stage": "tooling_molds",
+        "start_date": "2026-01-01",
+        "end_date": "2026-02-01",
+        "duration_days": 32,
+        "n_lines": 1,
+        "amount_cny": 0.0,
+    }
+
+
+def test_gantt_truncation_reports_total_style_count(tmp_path):
+    d = tmp_path / "reports"
+    rows = [
+        f"AF-{i:03d},tooling_molds,2026-01-01,2026-01-15,1,{30000 - 100 * i:.2f}"
+        for i in range(1, 31)
+    ]
+    write(d / "audit" / "by_style_timeline.csv",
+          "style_no,stage,start_date,end_date,n_lines,amount_cny", rows)
+    tl = build_dashboard_data(d)["timelines"]
+    assert len(tl["gantt"]) == 25
+    assert tl["gantt_truncated"] is True
+    assert tl["gantt_total_styles"] == 30
+    assert tl["gantt"][0]["style_no"] == "AF-001"  # richest style first
+    assert tl["unlinked"] == {"n_lines": 0, "amount_cny": 0.0}

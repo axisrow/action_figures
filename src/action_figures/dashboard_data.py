@@ -110,6 +110,7 @@ def load_by_style_stage(path: Path) -> list[dict]:
 
 
 def load_by_style_timeline(path: Path) -> list[dict]:
+    """Timeline rows; optional real-format n_lines/amount_cny default to 1/0.0."""
     rows = [
         {
             "style_no": _norm_style(r["style_no"]),
@@ -117,10 +118,15 @@ def load_by_style_timeline(path: Path) -> list[dict]:
             "start_date": r["start_date"],
             "end_date": r["end_date"],
             "duration_days": _d(r["start_date"], r["end_date"]),
+            "n_lines": int(r["n_lines"]) if r.get("n_lines") else 1,
+            "amount_cny": _f(r["amount_cny"]) if r.get("amount_cny") else 0.0,
         }
         for r in _read_csv(path)
     ]
     return sorted(rows, key=lambda r: (r["style_no"], r["start_date"]))
+
+
+UNATTRIBUTED = "Unattributed"
 
 
 def load_suppliers(path: Path) -> list[dict]:
@@ -128,13 +134,14 @@ def load_suppliers(path: Path) -> list[dict]:
 
     Legacy per-month:  supplier,stage,month,amount_cny
     Real aggregated:   supplier,stage,amount_cny,n_lines,months_active
-    (blank supplier names become "(unknown)").
+    Blank supplier names become ``UNATTRIBUTED`` and are pinned LAST
+    regardless of amount (data-quality bucket, not a real vendor).
     """
     rows = _read_csv(path)
     agg: dict[str, dict] = {}
     aggregated = bool(rows) and "months_active" in rows[0]
     for r in rows:
-        name = r["supplier"].strip() or "(unknown)"
+        name = r["supplier"].strip() or UNATTRIBUTED
         entry = agg.setdefault(
             name,
             {
@@ -155,7 +162,10 @@ def load_suppliers(path: Path) -> list[dict]:
             entry["months"].add(r["month"])
             entry["n_lines"] += 1
     out = [{**e, "months": sorted(e["months"])} for e in agg.values()]
-    return sorted(out, key=lambda r: r["amount_cny"], reverse=True)
+    out.sort(key=lambda r: r["amount_cny"], reverse=True)
+    named = [r for r in out if r["supplier"] != UNATTRIBUTED]
+    unattr = [r for r in out if r["supplier"] == UNATTRIBUTED]
+    return named + unattr
 
 
 def load_supplier_translations(path: Path) -> dict[str, str]:
@@ -441,17 +451,23 @@ def build_sankey(
     """Overview sankey payload: Spend -> stages -> top-10 suppliers + Others.
 
     Suppliers outside the top-10 (by total amount) collapse into a single
-    'Others (N suppliers)' node with one aggregated link per stage. Flow
-    invariant: Σ spend→stage links == Σ stage→supplier links == grand total.
-    Nodes are Spend, then stages, then suppliers (all by value, desc); links
-    are sorted by value desc. Also returns ``top_suppliers`` fallback rows
-    (top-10 + Others) with stage mix, totals and share of grand total.
+    'Others (N suppliers)' node with one aggregated link per stage. The
+    blank-supplier bucket (``UNATTRIBUTED``) never joins the ranking: it is
+    always its own node, pinned last among supplier nodes. Flow invariant:
+    Σ spend→stage links == Σ stage→supplier links == grand total. Nodes are
+    Spend, then stages, then suppliers (all by value, desc), Unattributed
+    last; links are sorted by value desc. Also returns ``top_suppliers``
+    fallback rows (top-10 + Others + Unattributed) with stage mix, totals
+    and share of grand total.
     """
-    top_rows = suppliers[:SANKEY_TOP_N]
-    tail_rows = suppliers[SANKEY_TOP_N:]
+    named = [s for s in suppliers if s["supplier"] != UNATTRIBUTED]
+    unattr = [s for s in suppliers if s["supplier"] == UNATTRIBUTED]
+    unattr_mix = unattr[0]["stage_mix"] if unattr else {}
+    top_rows = named[:SANKEY_TOP_N]
+    tail_rows = named[SANKEY_TOP_N:]
     label_of = {
         s["supplier"]: _supplier_label(s["supplier"], translations)
-        for s in suppliers
+        for s in named
     }
     top_names = {s["supplier"] for s in top_rows}
     others_name = f"Others ({len(tail_rows)} suppliers)" if tail_rows else None
@@ -461,10 +477,12 @@ def build_sankey(
     nodes += [{"name": label_of[s["supplier"]]} for s in top_rows]
     if others_name:
         nodes.append({"name": others_name})
+    if unattr:
+        nodes.append({"name": UNATTRIBUTED})
 
     per_stage_top: dict[str, list[tuple[str, float]]] = {}
     per_stage_others: dict[str, float] = {}
-    for s in suppliers:
+    for s in named:
         bucket = per_stage_top if s["supplier"] in top_names else None
         for stage_name, amount in s["stage_mix"].items():
             if bucket is None:
@@ -488,6 +506,10 @@ def build_sankey(
             {"source": stage_name, "target": others_name, "value": amount}
             for stage_name, amount in per_stage_others.items()
         ]
+    links += [
+        {"source": stage_name, "target": UNATTRIBUTED, "value": amount}
+        for stage_name, amount in unattr_mix.items()
+    ]
     links.sort(key=lambda ln: ln["value"], reverse=True)
 
     total = sum(r["amount_cny"] for r in stages)
@@ -514,6 +536,18 @@ def build_sankey(
                 ),
                 "total_cny": others_total,
                 "share_pct": round(others_total / total * 100, 1) if total else 0.0,
+            }
+        )
+    if unattr:
+        unattr_total = sum(unattr_mix.values())
+        fallback_rows.append(
+            {
+                "supplier": UNATTRIBUTED,
+                "stages": sorted(
+                    unattr_mix, key=lambda st: unattr_mix[st], reverse=True
+                ),
+                "total_cny": unattr_total,
+                "share_pct": round(unattr_total / total * 100, 1) if total else 0.0,
             }
         )
     return {"nodes": nodes, "links": links, "top_suppliers": fallback_rows}
@@ -570,9 +604,12 @@ def build_dashboard_data(
         [m, s, cell_map.get((m, s), 0.0)] for m in months for s in stage_names
     ]
 
-    # gantt: per style, stages sorted by start; styles by total duration desc
+    # gantt: attributed styles only — empty style_no rows are a data-quality
+    # footnote, not a product; spans come from attributed rows alone
+    linked = [r for r in timeline if r["style_no"]]
+    unlinked_rows = [r for r in timeline if not r["style_no"]]
     per_style: dict[str, list[dict]] = {}
-    for row in timeline:
+    for row in linked:
         per_style.setdefault(row["style_no"], []).append(row)
     gantt = [
         {
@@ -582,12 +619,27 @@ def build_dashboard_data(
                 min(s["start_date"] for s in stages_rows),
                 max(s["end_date"] for s in stages_rows),
             ),
+            "total_cny": sum(s["amount_cny"] for s in stages_rows),
         }
         for style_no, stages_rows in per_style.items()
     ]
-    gantt.sort(key=lambda g: g["total_days"], reverse=True)
-    gantt_truncated = len(gantt) > 25
+    gantt.sort(key=lambda g: (g["total_cny"], g["total_days"]), reverse=True)
+    gantt_total_styles = len(gantt)
+    gantt_truncated = gantt_total_styles > 25
     gantt = gantt[:25]
+
+    # blank-supplier bucket stats for the data-quality callout / explainer
+    unattr_rows = [s for s in suppliers if s["supplier"] == UNATTRIBUTED]
+    unattributed = None
+    if unattr_rows:
+        ua = unattr_rows[0]
+        unattributed = {
+            "n_lines": ua["n_lines"],
+            "amount_cny": ua["amount_cny"],
+            "share_pct": round(ua["amount_cny"] / total_spend * 100, 1)
+            if total_spend
+            else 0.0,
+        }
 
     # sankey: Spend -> stage -> supplier (top-10 + Others, EN labels when known)
     sankey = build_sankey(suppliers, stages, translations)
@@ -648,6 +700,7 @@ def build_dashboard_data(
                 "top_stage": stages[0]["stage"] if stages else "",
             },
             "unclassified": unclassified,
+            "unattributed": unattributed,
             "executive": executive,
             "sankey": sankey,
         },
@@ -657,8 +710,20 @@ def build_dashboard_data(
             "months": months,
             "heatmap": {"months": months, "stages": stage_names, "cells": cells},
         },
-        "timelines": {"gantt": gantt, "gantt_truncated": gantt_truncated},
-        "suppliers": {"all": suppliers, "top": suppliers[:10]},
+        "timelines": {
+            "gantt": gantt,
+            "gantt_truncated": gantt_truncated,
+            "gantt_total_styles": gantt_total_styles,
+            "unlinked": {
+                "n_lines": sum(r["n_lines"] for r in unlinked_rows),
+                "amount_cny": sum(r["amount_cny"] for r in unlinked_rows),
+            },
+        },
+        "suppliers": {
+            "all": suppliers,
+            "top": suppliers[:10],
+            "unattributed": unattributed,
+        },
         "benchmarks": {"rows": bench_rows, "stages": bench_stages},
         "optimizations": opt,
         "glossary": {"rows": glossary},
