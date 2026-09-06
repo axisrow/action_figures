@@ -75,6 +75,13 @@ MOCK_BY_MONTH_STAGE = """month,stage,amount_cny
 2026-04,injection_molding,12000.00
 2026-04,packaging,12000.00
 2026-04,logistics_freight,7000.00
+2026-01,design_prototyping,1200.00
+2026-02,design_prototyping,800.00
+2026-03,textile_accessories,3000.00
+2026-05,assembly_processing,15000.00
+2026-02,admin_other,1500.00
+2026-03,admin_other,1500.00
+2026-04,unclassified,1200.00
 """
 
 MOCK_BY_DAY_STAGE = """date,stage,amount_cny,n_lines
@@ -103,6 +110,13 @@ MOCK_BY_DAY_STAGE = """date,stage,amount_cny,n_lines
 2026-02-17,logistics_freight,8000.00,14
 2026-03-12,logistics_freight,7000.00,13
 2026-04-11,logistics_freight,7000.00,14
+2026-01-20,design_prototyping,1200.00,2
+2026-02-18,design_prototyping,800.00,2
+2026-03-18,textile_accessories,3000.00,6
+2026-05-22,assembly_processing,15000.00,29
+2026-02-25,admin_other,1500.00,4
+2026-03-27,admin_other,1500.00,5
+2026-04-15,unclassified,1200.00,7
 """
 
 MOCK_BY_STYLE_STAGE = """style_no,stage,amount_cny
@@ -1331,21 +1345,17 @@ def render_html(data: dict, generated_from: str) -> str:
       document.getElementById(id).hidden = !showCharts;
     }});
     if (showCharts) {{
+      var opt = stageChartOption(page);
       if (!stageCharts.m) {{
         stageCharts.m = echarts.init(document.getElementById('stage-chart-monthly'));
         stageCharts.d = echarts.init(document.getElementById('stage-chart-daily'));
         charts.push(stageCharts.m, stageCharts.d);
       }}
+      // re-entry rebinds the whole option (notMerge), never the first
+      // stage's data — and resize re-reads the now-visible container
       stageCharts.m.resize(); stageCharts.d.resize();
-      stageCharts.m.setOption({{
-        tooltip: {{ trigger: 'axis' }},
-        grid: {{ left: 60, right: 20 }},
-        xAxis: {{ type: 'category', data: (page.months || []).map(function (m) {{ return m.month; }}) }},
-        yAxis: {{ type: 'value', name: 'CNY' }},
-        series: [{{ type: 'bar', data: (page.months || []).map(function (m) {{ return m.amount_cny; }}),
-                   itemStyle: {{ color: '#0984e3' }} }}]
-      }}, true);
-      stageCharts.d.setOption(dailyOption(page.days || []), true);
+      stageCharts.m.setOption(opt.monthly, true);
+      stageCharts.d.setOption(opt.daily, true);
     }}
 
     fillStageTable('stage-tbl-suppliers', ['Supplier', 'Total', 'Share'],
@@ -1361,6 +1371,29 @@ def render_html(data: dict, generated_from: str) -> str:
   }}
 
   var stageCharts = {{}};
+
+  // Pure option builder for the stage-page charts (GH#24): months -> bar,
+  // days -> calendar-filled bars + 7-day rolling-average line. Exported on
+  // window so headless tests can exercise it without hash navigation.
+  function stageChartOption(stageData) {{
+    if (stageData.not_booked)
+      return {{ placeholder: true, monthly: null, daily: null }};
+    return {{
+      placeholder: false,
+      monthly: {{
+        tooltip: {{ trigger: 'axis' }},
+        grid: {{ left: 60, right: 20 }},
+        xAxis: {{ type: 'category',
+                  data: (stageData.months || []).map(function (m) {{ return m.month; }}) }},
+        yAxis: {{ type: 'value', name: 'CNY' }},
+        series: [{{ type: 'bar',
+                   data: (stageData.months || []).map(function (m) {{ return m.amount_cny; }}),
+                   itemStyle: {{ color: '#0984e3' }} }}]
+      }},
+      daily: dailyOption(stageData.days || [])
+    }};
+  }}
+  window.__stageChartOption = stageChartOption;
   function fillStageTable(id, headers, rows) {{
     var html = '<table class="fallback"><thead><tr>' +
       headers.map(function (h) {{ return '<th>' + h + '</th>'; }}).join('') +
@@ -1428,7 +1461,8 @@ def render_html(data: dict, generated_from: str) -> str:
     }}
     var m = location.hash.match(/^#\\/stage\\/([A-Za-z0-9_-]+)$/);
     if (m && stagesById[m[1]]) {{
-      fillStage(stagesById[m[1]]);
+      // show the panel BEFORE filling it: echarts.init on a display:none
+      // container produces a 0x0 canvas that nothing ever resizes (GH#24)
       document.querySelectorAll('.tab-panel').forEach(function (p) {{
         p.classList.toggle('active', p.id === 'stage-view');
       }});
@@ -1437,6 +1471,7 @@ def render_html(data: dict, generated_from: str) -> str:
           [stagesById[m[1]].label_en])),
         '#/tab/overview');
       setNav('');  // stage pages highlight nothing in the top nav
+      fillStage(stagesById[m[1]]);
       window.scrollTo(0, 0);
       return;
     }}

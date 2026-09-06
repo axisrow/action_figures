@@ -1,2 +1,4 @@
 pytest
 ruff
+playwright
+pytest-playwright
