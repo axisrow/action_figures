@@ -7,12 +7,12 @@ amounts — no real suppliers, style numbers, transaction dates or totals.
 from __future__ import annotations
 
 import re
-import subprocess
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 import pytest
+from conftest import init_repo as shared_init_repo
 
 from action_figures.audit_tables import by_day_stage
 from action_figures.classify import load_taxonomy
@@ -104,6 +104,20 @@ class TestByDayStage:
         out = by_day_stage(df)
         assert out["stage"].tolist() == ["tooling_molds", "raw_materials", "packaging"]
 
+    def test_timestamp_dates_normalized_to_iso_day(self):
+        """Re-ingest producing Timestamps/datetime must render the same ISO day."""
+        df = staged_frame(
+            [
+                ("L1", pd.Timestamp("2026-03-01"), "packaging", 1.0),
+                ("L2", datetime(2026, 3, 1, 14, 30), "packaging", 2.0),
+                ("L3", date(2026, 3, 2), "packaging", 4.0),
+            ]
+        )
+        out = by_day_stage(df)
+        assert out["date"].tolist() == ["2026-03-01", "2026-03-02"]
+        day1 = out[out["date"] == "2026-03-01"].iloc[0]
+        assert day1["n_lines"] == 2
+
     def test_input_frame_not_mutated(self):
         df = staged_frame([("L1", date(2026, 3, 1), "packaging", 1.0)])
         by_day_stage(df)
@@ -145,6 +159,12 @@ class TestStagesMetadata:
 
     def test_stage_order_covers_taxonomy(self):
         assert set(TAX) | {"unclassified"} == set(STAGE_ORDER)
+
+    def test_order_stage_missing_from_taxonomy_fails(self):
+        """A production stage without taxonomy keywords must fail fast, not get empty zh_keys."""
+        reduced = {k: v for k, v in TAX.items() if k != "packaging"}
+        with pytest.raises(ValueError, match="packaging"):
+            stages_metadata(reduced)
 
     def test_labels_and_descriptions_are_plain_english(self):
         meta = stages_metadata(TAX)
@@ -256,15 +276,7 @@ class TestCheckStageTotals:
 
 
 def init_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(
-        ["git", "init", "-q"], cwd=repo, check=True, capture_output=True,
-        env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
-             "HOME": str(repo), "PATH": "/usr/bin:/bin:/usr/local/bin"},
-    )
-    (repo / ".gitignore").write_text("data/\nreports/\n", encoding="utf-8")
-    return repo
+    return shared_init_repo(tmp_path / "repo")
 
 
 class TestRunChecksIncludesStageTotals:

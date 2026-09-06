@@ -120,6 +120,11 @@ def stages_metadata(taxonomy: Mapping[str, Sequence[str]]) -> pd.DataFrame:
     missing = set(taxonomy) - set(STAGE_ORDER)
     if missing:
         raise ValueError(f"taxonomy stages missing from STAGE_ORDER: {sorted(missing)}")
+    # A production stage with no taxonomy entry would silently get an empty
+    # zh_keys cell; only the `unclassified` fallback legitimately has none.
+    unknown = set(STAGE_ORDER) - set(taxonomy) - {"unclassified"}
+    if unknown:
+        raise ValueError(f"STAGE_ORDER stages missing from taxonomy: {sorted(unknown)}")
     rows = [
         {
             "stage_id": stage,

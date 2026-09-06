@@ -35,18 +35,30 @@ def by_supplier_stage(df: pd.DataFrame) -> pd.DataFrame:
     return out[["supplier", "stage", "amount_cny", "n_lines", "months_active"]]
 
 
+def _iso_day(value: object) -> str:
+    """date/datetime/Timestamp -> 'YYYY-MM-DD'; missing values -> ''."""
+    if pd.isna(value):
+        return ""
+    return pd.Timestamp(value).date().isoformat()
+
+
 def by_day_stage(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate staged lines by calendar day × stage.
 
     Columns: date, stage, amount_cny, n_lines. Rows sorted by date, then
     amount within a day; lines without a usable date form the last group with
-    an empty date cell, so Σ(amount_cny) always equals Σ(df.amount).
+    an empty date cell, so Σ(amount_cny) always equals Σ(df.amount). Dates
+    are normalized to ISO calendar days before grouping (pd.Timestamp on the
+    cell value), so staged datetime.date values and any re-ingest producing
+    Timestamps group and sort identically.
     """
     out = (
-        df.groupby(["date", "stage"], dropna=False)
+        df.assign(date=df["date"].map(_iso_day))
+        .groupby(["date", "stage"], dropna=False)
         .agg(n_lines=("line_id", "count"), amount_cny=("amount", "sum"))
         .reset_index()
-        .sort_values(["date", "amount_cny"], ascending=[True, False], na_position="last")
     )
-    out["date"] = out["date"].map(lambda d: d.isoformat() if pd.notna(d) else "")
+    out["_has_date"] = out["date"] != ""
+    out = out.sort_values(["_has_date", "date", "amount_cny"],
+                          ascending=[False, True, False])
     return out[["date", "stage", "amount_cny", "n_lines"]].reset_index(drop=True)

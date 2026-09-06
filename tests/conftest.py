@@ -6,6 +6,7 @@ No real financial data ever enters this repo or its tests.
 """
 
 import random
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -111,3 +112,34 @@ def ingest_xlsx(tmp_path) -> Path:
     path = tmp_path / "fake_ingest.xlsx"
     wb.save(path)
     return path
+
+
+# --- Synthetic git repo for hygiene checks (mirrors the real repo layout) ---
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "HOME": str(repo),
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+        },
+    ).stdout
+
+
+def init_repo(repo: Path) -> Path:
+    """Empty git repo whose .gitignore matches the real one (data/reports/issues)."""
+    repo.mkdir(parents=True, exist_ok=True)
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "t@example.com")
+    git(repo, "config", "user.name", "T")
+    (repo / ".gitignore").write_text("data/\nreports/\nissues/\n*.xls\n*.xlsx\n*.pkl\n")
+    (repo / "README.md").write_text("synthetic repo\n")
+    git(repo, "add", ".gitignore", "README.md")
+    git(repo, "commit", "-q", "-m", "init")
+    return repo
