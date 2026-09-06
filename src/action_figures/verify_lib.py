@@ -1060,9 +1060,6 @@ def check_benchmark_pages(dist_html: Path, reports_root: Path) -> CheckResult:
 
 HREF_RE = re.compile(r'href="#/([^"]*)"')
 
-# back targets the router and the static HTML hard-wire per detail screen
-DETAIL_BACK_PREFIXES = ("#/stage/", "#/supplier/", "#/optimization/", "#/bench/")
-
 
 def check_routes_complete(dist_html: Path) -> CheckResult:
     """(4h) no dead ends: every screen reachable, every link/back target valid.
