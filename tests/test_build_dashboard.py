@@ -33,6 +33,7 @@ def test_mock_data_matches_real_schema(mock_data):
         "optimizations",
         "glossary",
         "stages",
+        "ideal_timeline",
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
@@ -152,6 +153,7 @@ def test_html_every_chart_has_heading_and_hint(html):
         "Month × stage heatmap",  # cost heatmap
         "Production timeline per style",  # gantt
         "Ours vs market range",  # benchmarks
+        "Ideal production timeline (reference)",  # ideal gantt
     ]
     for heading in headings:
         assert f"<h3>{heading}</h3>" in html
@@ -291,3 +293,47 @@ def test_hash_router_defaults_to_overview(html):
     # unguarded fallback: any non-stage hash (empty, '#/overview', stray)
     assert "showTab('overview');" in router
     assert "location.hash === '#/overview'" not in router
+
+
+# --- PE-4: ideal production timeline (reference Gantt on the Overview) ----
+
+
+def test_payload_has_ideal_timeline_section(mock_data):
+    it = mock_data["ideal_timeline"]
+    assert it["weeks_axis"] == [0, 26]
+    assert it["bars"]
+    assert all(b["source_url"].startswith("https://") for b in it["bars"])
+
+
+def test_html_ideal_timeline_heading_and_disclaimer(html):
+    assert "<h3>Ideal production timeline (reference)</h3>" in html
+    assert (
+        "typical durations from market benchmarks; our payment dates are "
+        "not the physical cycle" in html
+    )
+    assert 'id="chart-ideal"' in html
+
+
+def test_html_ideal_timeline_nojs_fallback_table(html):
+    """Static twin: stage → week range → typical duration → source link."""
+    table = html.split("Ideal timeline (no-JS fallback)", 1)[1]
+    table = table.split("</table>", 1)[0]
+    # one row per reference bar, read from the embedded payload
+    import json
+
+    payload = html[html.index(">", html.index('id="dash-data"')) + 1:
+                   html.index("</script>", html.index('id="dash-data"'))]
+    bars = json.loads(payload)["ideal_timeline"]["bars"]
+    assert table.count("<tr>") == 1 + len(bars)
+    # week range of the first bar (design: week 0 → …) is in the table
+    first = bars[0]
+    assert f'{first["start_week"]}–{first["end_week"]}' in table
+    # every source row links out to its benchmark URL
+    for b in bars:
+        assert f'href="{b["source_url"]}"' in table
+
+
+def test_html_ideal_gantt_click_routes_to_stage_page(html):
+    """The ideal-gantt bar click handler must navigate to #/stage/<id>."""
+    ideal_js = html.split("chart-ideal", 1)[1]
+    assert "location.hash = '#/stage/' +" in ideal_js

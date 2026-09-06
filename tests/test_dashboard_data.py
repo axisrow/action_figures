@@ -650,3 +650,100 @@ def test_payload_stages_absent_without_stages_csv(tmp_path):
           "stage,n_lines,amount_cny,share_pct",
           ["tooling_molds,1,100.00,100.0"])
     assert build_dashboard_data(d)["stages"] == []
+
+
+def test_ideal_timeline_rows_unique_without_stages_csv(tmp_path):
+    """No stages.csv → rows fall back to module order and must not duplicate
+    a stage listed twice in the module (tooling steel + aluminum)."""
+    d = tmp_path / "reports"
+    write(d / "audit" / "stage_summary.csv",
+          "stage,n_lines,amount_cny,share_pct",
+          ["tooling_molds,1,100.00,100.0"])
+    it = build_dashboard_data(d)["ideal_timeline"]
+    row_ids = [r["stage_id"] for r in it["rows"]]
+    assert len(row_ids) == len(set(row_ids)) == 9
+    bars = it["bars"]
+    assert len({b["row"] for b in bars}) == len(row_ids)
+
+
+# --- ideal_timeline payload (PE-4: reference Gantt on the Overview) ------
+
+
+def ideal_bars(reports_dir):
+    return build_dashboard_data(reports_dir)["ideal_timeline"]["bars"]
+
+
+def test_ideal_timeline_payload_shape(reports_dir):
+    """Section ideal_timeline: fixed 0-26 week axis, sourced bars, rows."""
+    it = build_dashboard_data(reports_dir)["ideal_timeline"]
+    assert it["weeks_axis"] == [0, 26]
+    assert len(it["total_weeks"]) == 2
+    assert 0 < it["total_weeks"][0] <= it["total_weeks"][1] <= 26
+    assert "payment dates" in it["disclaimer"]
+    assert it["rows"] and [r["row"] for r in it["rows"]] == list(
+        range(len(it["rows"]))
+    )
+    assert it["bars"]
+    for b in it["bars"]:
+        assert {"stage_id", "label", "variant", "row", "parallel",
+                "start_week", "min_end_week", "max_start_week", "end_week",
+                "min_weeks", "max_weeks", "source_file",
+                "source_url"} <= set(b)
+        assert 0 <= b["start_week"] < b["end_week"] <= 26
+        assert b["start_week"] <= b["min_end_week"]
+        assert b["max_start_week"] <= b["end_week"]
+        assert b["source_url"].startswith("https://")
+    assert max(b["end_week"] for b in it["bars"]) == it["total_weeks"][1]
+
+
+def test_ideal_timeline_rows_follow_stages_csv_order(reports_dir):
+    """Y rows: stages.csv process order first, module-only stages appended."""
+    it = build_dashboard_data(reports_dir)["ideal_timeline"]
+    by_id = {r["stage_id"]: r for r in it["rows"]}
+    # fixture stages.csv knows design(1)/tooling(2)/painting(5)/logistics(10)
+    assert (by_id["design_prototyping"]["row"]
+            < by_id["tooling_molds"]["row"]
+            < by_id["painting_printing"]["row"]
+            < by_id["logistics_freight"]["row"])
+    # labels come from stages.csv when the stage is known there
+    assert by_id["tooling_molds"]["label"] == "Tooling & Molds"
+    # unknown-to-stages.csv stages still get a readable label + a row
+    assert by_id["injection_molding"]["label"] == "injection molding"
+
+
+def test_ideal_timeline_first_bar_starts_at_week_zero(reports_dir):
+    bars = ideal_bars(reports_dir)
+    assert bars[0]["stage_id"] == "design_prototyping"
+    assert bars[0]["start_week"] == 0
+    assert not bars[0]["parallel"]
+
+
+def test_ideal_timeline_tooling_variants_share_row_and_start(reports_dir):
+    bars = ideal_bars(reports_dir)
+    tooling = [b for b in bars if b["stage_id"] == "tooling_molds"]
+    assert {b["variant"] for b in tooling} == {"steel", "aluminum"}
+    assert len({(b["row"], b["start_week"]) for b in tooling}) == 1
+
+
+def test_ideal_timeline_parallel_window_overlaps(reports_dir):
+    """injection_molding and textile_accessories start in the same week and
+    are flagged parallel; both start after design+tooling could finish."""
+    bars = ideal_bars(reports_dir)
+    by_id = {}
+    for b in bars:
+        by_id.setdefault(b["stage_id"], []).append(b)
+    inj, tex = by_id["injection_molding"][0], by_id["textile_accessories"][0]
+    assert inj["parallel"] and tex["parallel"]
+    assert inj["start_week"] == tex["start_week"]
+    # the window may open after the FASTEST tooling variant (aluminum)
+    fastest_tooling = min(b["min_end_week"] for b in by_id["tooling_molds"])
+    assert inj["start_week"] >= fastest_tooling
+    # every later main-chain stage starts at/after the window's fastest end
+    pack = by_id["packaging"][0]
+    assert pack["start_week"] >= inj["min_end_week"]
+
+
+def test_ideal_timeline_payload_is_json_safe(reports_dir):
+    import json
+
+    json.dumps(build_dashboard_data(reports_dir)["ideal_timeline"])
