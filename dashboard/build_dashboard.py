@@ -19,6 +19,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 if str(SRC) not in sys.path:
@@ -198,6 +199,20 @@ def build_mock_data() -> dict:
 
 STAGES = "stages"
 CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+
+# Tab icon: orange "A" + amber "F" on the dashboard-blue tile (32x32, palette
+# colors from CSS/PALETTE). Inlined as a percent-encoded SVG data URI so the
+# page makes no /favicon.ico request — nothing to 404, no extra file to ship.
+FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+    "<rect width='32' height='32' rx='7' fill='#0984e3'/>"
+    "<path d='M5 24 11 8 17 24' fill='none' stroke='#e17055' "
+    "stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/>"
+    "<path d='M21 24V8h7M21 16h6' fill='none' stroke='#fdcb6e' "
+    "stroke-width='3' stroke-linecap='round'/>"
+    "</svg>"
+)
+FAVICON = "data:image/svg+xml," + quote(FAVICON_SVG, safe="'/:=,")
 
 STAGE_COLORS = {
     "tooling_molds": "#6c5ce7",
@@ -665,6 +680,7 @@ def render_html(data: dict, generated_from: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="{FAVICON}">
 <title>Action Figures — Production Cost Dashboard</title>
 <style>{CSS}</style>
 </head>

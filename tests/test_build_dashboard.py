@@ -71,6 +71,31 @@ def test_echarts_cdn_url_is_pinned_and_valid(html):
     assert urls == {"https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"}
 
 
+def test_html_has_inline_svg_favicon(html):
+    # the tab icon must be an inline SVG data URI — no /favicon.ico request,
+    # so the page never 404s on a missing asset
+    import re
+    import urllib.parse
+
+    m = re.search(r'<link rel="icon"[^>]*href="([^"]+)"', html)
+    assert m, "generated HTML must carry a <link rel=icon>"
+    assert m.group(1).startswith("data:image/svg+xml,")
+    assert "favicon.ico" not in html
+    svg = urllib.parse.unquote(m.group(1).split(",", 1)[1])
+    assert svg.startswith("<svg")
+    assert "viewBox='0 0 32 32'" in svg  # crisp at any tab size
+
+
+def test_no_autoloaded_asset_can_404(html):
+    # every resource the browser fetches on page load is inline or on the CDN
+    import re
+
+    refs = re.findall(r'<(?:script|link)\b[^>]*?\b(?:src|href)="([^"]+)"', html)
+    assert refs  # the template declares its assets
+    for ref in refs:
+        assert ref.startswith(("data:", "https://cdn.jsdelivr.net/")), ref
+
+
 def test_main_writes_dist_index(tmp_path, monkeypatch):
     out = tmp_path / "dist" / "index.html"
     rc = bd.main(["--reports", str(tmp_path / "missing_reports"), "--out", str(out)])
