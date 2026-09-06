@@ -595,6 +595,35 @@ def build_ideal_timeline(stages_meta: list[dict]) -> dict:
     }
 
 
+# --- Executive Home (EI-2) ------------------------------------------------
+
+
+def build_home(stage_menu: list[dict], tab_titles: dict[str, str]) -> dict:
+    """Payload section ``home`` (EI-2, owner design pass + EI-1 shell).
+
+    Home is exactly the stage-card menu (the ten production stages + the
+    Other block + no-JS fallback); the KPI row and takeaway cards were
+    dropped by the owner as redundant — data-quality callouts live on
+    Cost structure. ``lead`` is the one-line subtitle, ``deepdive_links``
+    mirror the shell nav (the six deep-dive tabs under '#/tab/<id>').
+    """
+    return {
+        "lead": (
+            "The production process as a menu — open a stage to see what "
+            "it is and what it cost."
+        ),
+        "stage_cards": stage_menu,
+        "deepdive_links": [
+            {
+                "id": tab_id,
+                "label": _ia_title(tab_id, tab_titles),
+                "href": f"#/tab/{tab_id}",
+            }
+            for tab_id in IA_TABS
+        ],
+    }
+
+
 # --- aggregate -----------------------------------------------------------
 
 
@@ -1137,6 +1166,7 @@ def build_dashboard_data(
     }
 
     return {
+        "home": build_home(stage_menu, tab_titles or {}),
         "overview": {
             "summary": {
                 "top_stage": stages[0]["stage"] if stages else "",
