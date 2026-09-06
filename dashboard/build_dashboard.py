@@ -427,7 +427,8 @@ def _render_stage_menu(menu_stages: list[dict]) -> str:
         ],
     )
     return (
-        f"<h3>How an action figure is made — {len(production)} stages</h3>"
+        # EI-5: this h2 IS the Home screen title — the shell adds no other
+        f"<h2>How an action figure is made — {len(production)} stages</h2>"
         '<p class="hint">The real production order, from first sketch to '
         "shipped carton. Click a stage to open its page.</p>"
         '<ol class="stage-menu" id="stage-menu">'
@@ -537,7 +538,7 @@ def _render_money_flow(d: dict) -> str:
         "the suppliers paid for it — top 10 individually, the rest lumped "
         "into Others.</p>"
         + _chart("sankey", 640)
-        + "<details open><summary>Tables (no-JS fallback)</summary>"
+        + '<details><summary>Show details</summary>'
         + fallback
         + "</details>"
     )
@@ -569,9 +570,9 @@ def _render_cost(d: dict) -> str:
         for m in cs["months"]
     ]
     return (
-        "<p>Four views of the same numbers: totals, monthly trend, shares and "
-        "a month×stage matrix.</p>"
-        + _render_data_quality_notes(d)
+        # EI-5: the stale "Four views" intro is gone (money flow made it five,
+        # and each chart below carries its own hint)
+        _render_data_quality_notes(d)
         + _render_money_flow(d)
         + "<h3>Total spend by stage</h3>"
         + '<p class="hint">One bar per production stage — taller means more '
@@ -589,7 +590,7 @@ def _render_cost(d: dict) -> str:
         + '<p class="hint">Darker cells mark the months where a stage cost '
         "the most.</p>"
         + _chart("heatmap")
-        + "<details open><summary>Tables (no-JS fallback)</summary>"
+        + "<details><summary>Show details</summary>"
         + _table(["Stage", "Total", "Share", "Lines"], stage_rows)
         + _table(["Month", *[_label(s) for s in cs["heatmap"]["stages"]]], month_rows)
         + "</details>"
@@ -624,13 +625,15 @@ def _render_timelines(d: dict) -> str:
         + _render_ideal_timeline(d)
         + "<h3>Production timeline per style</h3>"
         + '<p class="hint">Each row is a style; bars show when every stage '
-        "was paid. Re-sort the rows by total spend or by duration below.</p>"
+        "was paid. To re-sort, open Show details below.</p>"
         + notes
+        + '<details id="gantt-sort-toggle"><summary>Show details</summary>'
         + '<div class="filters"><select id="gantt-sort" aria-label="Sort styles by">'
         '<option value="spend">By total spend</option>'
         '<option value="duration">By duration</option></select></div>'
+        + "</details>"
         + _chart("gantt", max(360, 60 * len(tl["gantt"])))
-        + "<details open><summary>Table (no-JS fallback)</summary>"
+        + "<details><summary>Show details</summary>"
         + _table(["Style", "Span (days)", "Stages"], rows)
         + "</details>"
     )
@@ -699,7 +702,8 @@ def _render_suppliers(d: dict) -> str:
         "</div>"
         f'<h3>Top {len(sup["top"])} suppliers</h3>'
         f'<div class="cards" id="sup-cards">{cards}</div>'
-        + table
+        + '<details id="sup-catalog"><summary>Show details</summary>'
+        + table + "</details>"
     )
 
 
@@ -733,8 +737,10 @@ def _render_benchmarks(d: dict) -> str:
             '<p class="hint">Purple bars are our values; green brackets show '
             "the market range — a bar inside its bracket is within market.</p>",
             _chart("bench", 360),
-            _table(["Stage", "Metric", "Ours", "Market range", "Unit", "Source",
-                    "Verdict"], rows),
+            '<details id="bench-metrics"><summary>Show details</summary>'
+            + _table(["Stage", "Metric", "Ours", "Market range", "Unit",
+                      "Source", "Verdict"], rows)
+            + "</details>",
         ]
     cards = []
     for s in bm["stages"]:
@@ -788,7 +794,7 @@ def _render_benchmarks(d: dict) -> str:
         ])
     if fb_rows:
         parts.append(
-            "<details><summary>Benchmarks (no-JS fallback)</summary>"
+            '<details id="bench-fallback"><summary>Show details</summary>'
             + _table(
                 ["Stage", "Ours (share / H1-2026)", "Market ranges",
                  "Sources"],
@@ -842,7 +848,7 @@ def _render_optimizations(d: dict) -> str:
         "page: baseline, savings math, evidence links and risks.</p>"
         f'<div class="cards">{cards}</div>'
         + ins_html
-        + "<details open><summary>Optimizations (no-JS fallback)</summary>"
+        + '<details id="opt-fallback"><summary>Show details</summary>'
         + _table(["#", "Recommendation", "Stage", "Baseline", "Saving (6-mo)",
                   "Prob.", "Effort", "Time saved", "What to do",
                   "Savings math", "Risks"], rows)
@@ -900,7 +906,7 @@ CSS = """
   --status-bad: #d63031; --status-neutral: #b2bec3;
 }
 * { box-sizing: border-box; }
-body { margin: 0; font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+body { margin: 0; font: var(--text-base)/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
        background: var(--bg); color: var(--ink); }
 header { background: var(--ink); color: #fff; padding: 10px 24px; position: sticky;
          top: 0; z-index: 5; }
@@ -936,12 +942,9 @@ main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; }
 .tab-panel.active { display: block; }
 h2 { margin: 8px 0 12px; font-size: var(--h2-size); }
 h3 { margin: 22px 0 8px; font-size: var(--h3-size); }
+h4 { margin: 0 0 6px; font-size: var(--text-base); }
 .lead { color: var(--text-muted); }
 .hint { color: var(--text-muted); font-size: var(--text-sm); margin: 4px 0 8px; }
-.exec { background: var(--card-bg); border-left: 4px solid #6c5ce7;
-        border-radius: var(--card-radius);
-        padding: 14px 20px; margin: 10px 0; box-shadow: var(--card-shadow); }
-.exec li { margin: 6px 0; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
          gap: var(--space-2); margin: 14px 0; }
 .tile, .opt-card, .sup-card, .bench-card { background: var(--card-bg);
@@ -950,19 +953,13 @@ h3 { margin: 22px 0 8px; font-size: var(--h3-size); }
 .tile-num { font-size: var(--tile-num-size); font-weight: 700; }
 .tile.kpi .tile-num { font-size: var(--kpi-size); line-height: 1.15; }
 .tile.kpi .tile-label { font-size: var(--kpi-label-size); }
-.tile-label { color: var(--text-muted); font-size: 12px; text-transform: uppercase;
-              letter-spacing: .04em; }
-.home-links { display: grid; grid-template-columns: repeat(auto-fit,
-              minmax(260px,1fr)); gap: var(--space-2); margin: var(--space-2) 0; }
-.home-link { background: var(--card-bg); border-radius: var(--card-radius);
-             box-shadow: var(--card-shadow); padding: var(--space-2) var(--space-3);
-             color: var(--ink); text-decoration: none; font-weight: 600; }
-.home-link:hover { color: var(--accent); }
+.tile-label { color: var(--text-muted); font-size: var(--kpi-label-size);
+              text-transform: uppercase; letter-spacing: .04em; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr));
          gap: var(--space-2); margin: 12px 0; }
 .opt-card .saving { color: var(--status-good); font-weight: 700; margin: 6px 0; }
-.opt-card .base, .proof { color: var(--text-muted); font-size: 13px; }
-.mix-row { display: flex; justify-content: space-between; font-size: 13px; }
+.opt-card .base, .proof { color: var(--text-muted); font-size: var(--text-sm); }
+.mix-row { display: flex; justify-content: space-between; font-size: var(--text-sm); }
 .chart { background: var(--card-bg); border-radius: var(--card-radius);
          margin: 10px 0; box-shadow: var(--card-shadow); }
 table { border-collapse: collapse; width: 100%; background: var(--card-bg);
@@ -986,14 +983,37 @@ details summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 .stage-link:hover .stage-name { color: var(--accent); }
 .stage-no { background: #dfe6e9; border-radius: 50%; min-width: 26px; height: 26px;
             display: inline-flex; align-items: center; justify-content: center;
-            font-size: 13px; flex: none; }
+            font-size: var(--text-sm); flex: none; }
 .stage-name { flex: 1 1 auto; }
 .stage-amount { color: var(--text-muted); font-weight: 400; font-size: var(--text-sm); }
-.stage-menu .hint { margin: 4px 0 0 36px; font-size: 13px; }
+.stage-menu .hint { margin: 4px 0 0 36px; }
 a.back { display: inline-block; margin: 6px 0 10px; color: var(--accent);
          text-decoration: none; }
 a.back:hover { text-decoration: underline; }
+#print-btn { margin-left: var(--space-2); padding: 6px 14px; cursor: pointer;
+             border: 1px solid var(--status-neutral); border-radius: 6px;
+             background: var(--card-bg); color: var(--ink);
+             font-size: var(--text-sm); }
+#print-btn:hover { border-color: var(--accent); color: var(--accent); }
 footer { text-align: center; color: var(--status-neutral); font-size: 12px; padding: 20px; }
+/* EI-5 presentation mode: every screen prints as a one-page summary —
+   KPIs + verdicts + stage menu, no interactive chrome. */
+@media print {
+  body { background: #fff; }
+  header { position: static; background: #fff; color: var(--ink);
+           border-bottom: 2px solid var(--ink); }
+  header .sub { color: var(--text-muted); }
+  nav#main-nav, #crumbs-bar, .filters, .chart, details, a.back,
+  #print-btn, footer { display: none !important; }
+  main { max-width: none; padding: 0; }
+  .tile, .opt-card, .sup-card, .bench-card, table { box-shadow: none; }
+  /* chart-only cards would leave orphan headings behind their hidden charts */
+  #stage-slot-monthly, #stage-slot-daily, #supplier-slot-mix,
+  #supplier-slot-monthly { display: none !important; }
+  th { position: static; }
+  .stage-menu li { padding: 4px 10px; margin: 4px 0; box-shadow: none; }
+  .stage-menu .hint { display: none; }
+}
 """
 
 
@@ -1003,8 +1023,12 @@ def render_html(data: dict, generated_from: str) -> str:
     palette = _stage_palette(data["cost_structure"]["heatmap"]["stages"])
     months = data["cost_structure"]["months"]
     period = f"{months[0]}…{months[-1]}" if months else ""
+    # EI-5: Home ships without the shell's "<h2>Home</h2>" — the stage menu's
+    # own h2 is the screen title (one heading per screen)
     tabs_html = (
-        _section("home", "Home", _render_home(data), active=True)
+        '<section id="home" class="tab-panel active" role="tabpanel">'
+        + _render_home(data)
+        + "</section>"
         + "".join(
             _section(tid, title, fn(data), active=False)
             for tid, title, fn in TABS
@@ -1040,6 +1064,7 @@ def render_html(data: dict, generated_from: str) -> str:
 <div id="crumbs-bar">
   <nav id="crumbs" aria-label="Breadcrumb"><span>Home</span></nav>
   <a id="back-link" href="#/home">← Back</a>
+  <button id="print-btn" type="button">Print view</button>
 </div>
 <main>
 {tabs_html}
@@ -1712,6 +1737,10 @@ def render_html(data: dict, generated_from: str) -> str:
   }}
   window.addEventListener('hashchange', route);
   route();
+
+  // EI-5 presentation mode: print the current screen as a one-page summary
+  var printBtn = document.getElementById('print-btn');
+  if (printBtn) printBtn.addEventListener('click', function () {{ window.print(); }});
 
   // Supplier search / filters (client-side)
   var search = document.getElementById('sup-search');

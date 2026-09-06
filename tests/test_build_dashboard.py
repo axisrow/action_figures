@@ -204,6 +204,14 @@ def test_html_gantt_sort_control(html):
     assert "By duration" in html
 
 
+def test_html_gantt_sort_hint_matches_collapsed_ui(html):
+    """EI-5 review: the sort control hides behind a collapsed 'Show details'
+    — the hint must not promise an always-visible control below."""
+    assert "Re-sort the rows" not in html
+    timelines = html.split('id="timelines"', 1)[1].split("</section>", 1)[0]
+    assert "To re-sort, open Show details below." in timelines
+
+
 def test_html_unattributed_callout_and_explainer(patched_html):
     # overview data-quality callout
     assert "31.6% of spend is unattributed to a supplier" in patched_html
@@ -248,7 +256,9 @@ def test_payload_stages_lists_all_12_in_process_order(mock_data):
 
 
 def test_stage_menu_lists_ten_production_stages_in_order(html):
-    assert "<h3>How an action figure is made — 10 stages</h3>" in html
+    # EI-5: the menu heading IS the Home screen title (h2 scale), the
+    # redundant shell "<h2>Home</h2>" is gone — one heading per screen
+    assert "<h2>How an action figure is made — 10 stages</h2>" in html
     menu = html.split('id="stage-menu"', 1)[1].split('id="stage-other"', 1)[0]
     import re
 
@@ -637,3 +647,96 @@ def test_home_payload_deepdive_links_match_shell_nav(mock_data):
         (tid, f"#/tab/{tid}") for tid in DEEP_DIVE_TABS
     ]
     assert links[0]["label"] == "Cost structure"  # titles from TABS
+
+
+# --- EI-5 (GH#30): noise pass — details-on-demand, unified type, print -----
+
+
+def _inside_an_open_details(html: str, anchor: str) -> bool:
+    """True when ``anchor`` sits between a ``<details>`` and its closing tag."""
+    tail = html.split(anchor, 1)[0].rsplit("</details>", 1)[-1]
+    return "<details" in tail
+
+
+def test_secondary_blocks_collapse_behind_show_details(html):
+    """EI-5 details-on-demand: the secondary tables and the view-switch
+    toggles hide behind one collapsed 'Show details' disclosure each. The
+    migration's pre-expanded '<details open>' walls are gone; content stays
+    in the DOM (nothing deleted)."""
+    assert "<details open>" not in html
+    # money-flow tables, cost tables, timelines table, optimizations table,
+    # benchmarks fallback, gantt sort toggle, supplier catalog,
+    # benchmarks metrics table
+    assert html.count("<summary>Show details</summary>") == 8
+    # the toggles/tables really sit inside a collapsed <details>
+    for anchor in ('id="gantt-sort-toggle"', 'id="sup-catalog"',
+                   'id="bench-metrics"'):
+        assert _inside_an_open_details(html, anchor), anchor
+    # ...and every wrapped table is still rendered server-side
+    sup = html.split('class="supplier-table"', 1)[1]
+    assert sup.count("<tr>") >= 10  # full catalog, not a stub
+
+
+def test_home_single_screen_heading(html):
+    """EI-5 typography: one heading per screen. The stage-menu h2 IS the
+    Home title; the shell's duplicate '<h2>Home</h2>' is gone."""
+    home = html.split('id="home"', 1)[1].split("</section>", 1)[0]
+    assert home.count("<h2>") == 1
+    assert 'id="home" class="tab-panel active" role="tabpanel"' in html
+
+
+def test_typography_uses_token_scale(html):
+    """EI-5: text sizes come from the EI-1 tokens — raw 13px literals and
+    the token-less tile captions are gone; card headings (h4) get the token
+    scale too."""
+    assert "font-size: 13px" not in html
+    assert "font: var(--text-base)/1.55" in html
+    assert (
+        ".tile-label { color: var(--text-muted);"
+        " font-size: var(--kpi-label-size);" in html
+    )
+    assert "h4 { margin: 0 0 6px; font-size: var(--text-base); }" in html
+
+
+def test_migration_debris_removed(html):
+    """EI-5 noise pass: styles and copy for screens the migration deleted
+    are gone, not idling. The Cost intro still says 'Four views' although
+    money flow made it five — stale migration copy."""
+    assert "home-link" not in html
+    assert ".exec" not in html
+    assert "Four views of the same numbers" not in html
+
+
+def _print_css(html: str) -> str:
+    start = html.index("@media print")
+    return html[start:html.index("</style>", start)]
+
+
+def test_print_mode_hides_interactive_chrome(html):
+    """EI-5 presentation mode: @media print turns any screen into a one-page
+    summary — nav, breadcrumbs bar, filters, charts, back links, footer and
+    the collapsed disclosures all stay off the paper."""
+    print_css = _print_css(html)
+    assert "display: none" in print_css
+    for sel in ("nav#main-nav", "#crumbs-bar", ".filters", ".chart",
+                "a.back", "footer", "#print-btn", "details"):
+        assert sel in print_css, sel
+
+
+def test_print_mode_keeps_summary_content(html):
+    """Print keeps what the summary is made of: stage menu, KPI tiles and
+    the verdict plates. Only chrome is hidden, never the numbers."""
+    import re
+
+    # capture whole selector lists (wrapped lines included) of every rule
+    # whose block hides its content — not just the line holding the brace
+    hidden = " ".join(
+        re.findall(r"([^{}]+)\{[^}]*display:\s*none", _print_css(html))
+    )
+    for keep in (".tiles", ".stage-menu li", "#stage-plate", "table"):
+        assert keep not in hidden, keep
+
+
+def test_print_view_button(html):
+    assert '<button id="print-btn" type="button">Print view</button>' in html
+    assert "window.print()" in html
