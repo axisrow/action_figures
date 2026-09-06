@@ -380,20 +380,12 @@ def check_dashboard_payload(dist_html: Path, reports_root: Path, tol: float = TO
     """(4) JSON embedded in dist/index.html == reports CSVs (post-regeneration)."""
     dist_html = Path(dist_html)
     summary_path = Path(reports_root) / "audit" / "stage_summary.csv"
-    if not dist_html.exists():
-        return CheckResult(
-            "dashboard_payload",
-            PENDING,
-            f"{dist_html} not built yet — regenerate dist and re-run verify",
-        )
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        status = PENDING if not dist_html.exists() else FAIL
+        return CheckResult("dashboard_payload", status, error)
     if not summary_path.exists():
         return CheckResult("dashboard_payload", PENDING, "no reports/audit/stage_summary.csv")
-    match = DASH_JSON_RE.search(dist_html.read_text(encoding="utf-8"))
-    if not match:
-        return CheckResult(
-            "dashboard_payload", FAIL, "dash-data script tag not found in dist/index.html"
-        )
-    payload = json.loads(match.group(1).replace("\\u003c", "<"))
     csv_rows = pd.read_csv(summary_path)
     csv_map = {
         r["stage"]: (int(r["n_lines"]), round(float(r["amount_cny"]), 2))
@@ -440,6 +432,16 @@ STAGE_PAGE_TOP_N = 10
 UNATTRIBUTED_LABEL = "Unattributed"
 
 
+def _series_matches(got: list, expected: list, tol: float) -> bool:
+    """Same (key, amount) pairs in the same order, amounts within tol —
+    every per-stage series (months/days/styles/suppliers) uses the same
+    tolerance, so a 1-cent float artifact fails nowhere or everywhere."""
+    return len(got) == len(expected) and all(
+        g[0] == e[0] and abs(g[1] - e[1]) <= tol
+        for g, e in zip(got, expected, strict=True)
+    )
+
+
 def check_stage_pages(dist_html: Path, reports_root: Path, tol: float = TOL) -> CheckResult:
     """(4b) payload.stage_pages == CSV filters (by_month/by_day/style/supplier).
 
@@ -469,7 +471,10 @@ def check_stage_pages(dist_html: Path, reports_root: Path, tol: float = TOL) -> 
     summary_path = reports_root / "audit" / "stage_summary.csv"
     summary = pd.read_csv(summary_path)
     by_month = pd.read_csv(reports_root / "audit" / "by_month_stage.csv")
-    by_day = pd.read_csv(reports_root / "audit" / "by_day_stage.csv")
+    # keep_default_na=False: a blank date stays '' so the drop below is an
+    # explicit guard, not an implicit groupby NaN-drop — mirrors the builder's
+    # own blank-date filter (dashboard_data.build_stage_pages)
+    by_day = pd.read_csv(reports_root / "audit" / "by_day_stage.csv", keep_default_na=False)
     by_style = pd.read_csv(reports_root / "audit" / "by_style_stage.csv")
     by_supplier = pd.read_csv(
         reports_root / "audit" / "by_supplier_stage.csv", keep_default_na=False
@@ -494,23 +499,22 @@ def check_stage_pages(dist_html: Path, reports_root: Path, tol: float = TOL) -> 
             details.append(f"{sid}: missing from payload.stage_pages")
             continue
 
-        expected_months = (
+        expected_months = list(
             by_month[(by_month["stage"] == sid) & (by_month["amount_cny"] != 0)]
-            .groupby("month")["amount_cny"].sum().round(2)
+            .groupby("month")["amount_cny"].sum().round(2).items()
         )
         got_months = [(m["month"], round(float(m["amount_cny"]), 2))
                       for m in page.get("months") or []]
-        if got_months != list(expected_months.items()):
+        if not _series_matches(got_months, expected_months, tol):
             ok = False
             details.append(f"{sid}: months != by_month_stage.csv filter")
 
-        expected_days = (
-            by_day[(by_day["stage"] == sid) & (by_day["amount_cny"] != 0)]
-            .groupby("date")["amount_cny"].sum().round(2)
-        )
+        day_rows = by_day[(by_day["stage"] == sid) & (by_day["amount_cny"] != 0)]
+        day_rows = day_rows[day_rows["date"].astype(str).str.strip() != ""]
+        expected_days = list(day_rows.groupby("date")["amount_cny"].sum().round(2).items())
         got_days = [(d["date"], round(float(d["amount_cny"]), 2))
                     for d in page.get("days") or []]
-        if got_days != list(expected_days.items()):
+        if not _series_matches(got_days, expected_days, tol):
             ok = False
             details.append(f"{sid}: days != by_day_stage.csv filter")
 
@@ -526,7 +530,7 @@ def check_stage_pages(dist_html: Path, reports_root: Path, tol: float = TOL) -> 
              for r in page.get("top_styles") or []),
             key=lambda t: (-t[1], t[0]),
         )
-        if got_styles != expected_styles:
+        if not _series_matches(got_styles, expected_styles, tol):
             ok = False
             details.append(f"{sid}: top_styles != by_style_stage.csv filter")
 
