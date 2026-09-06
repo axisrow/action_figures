@@ -43,23 +43,42 @@ pytest         # tests (synthetic data only)
 
 CI (GitHub Actions) runs `ruff` + `pytest` on Python 3.11 and 3.12.
 
-## Process Explorer
+## Dashboard structure (Executive IA)
 
-The **Process Explorer** is the dashboard's guided tour of how an action
-figure is actually made. The Overview page lists the production stages in
-real process order (design → tooling → molding → painting → …), each with a
-plain-English description, its total spend and share. Clicking a stage (or
-using a URL like `#/stage/tooling_molds`) opens a dedicated page with:
+The dashboard is one static HTML file (`dashboard/dist/index.html`) with a
+client-side hash router. Every screen lives at its own `#/…` address, shows
+a breadcrumb trail (`Home › …`) and a `← Back` link — no screen is a dead
+end. `#/overview` redirects to `#/home` for old links.
 
-- monthly and daily spend charts (payments by invoice date, not the
-  physical production cycle),
-- top suppliers and top styles for that stage,
-- a **Not booked in this expense ledger** plate on stages whose costs are
-  tracked outside these spreadsheets (forensic review verdict), shown
-  instead of charts so residual rows are never mistaken for real cost.
+```
+#/home                       Executive Home: the stage menu (10 stages + Other)
+#/stage/<stage_id>           Stage page: charts, top suppliers/styles, stats
+#/tab/cost                   Cost structure (heatmap, monthly totals)
+#/tab/timelines              Product timelines (gantt) + ideal timeline
+#/tab/suppliers              Supplier catalog → #/supplier/<name> cards
+#/tab/benchmarks             Market benchmarks → #/bench/<stage_id> pages
+#/tab/optimizations          Savings recommendations → #/optimization/<id>
+#/tab/glossary               zh→en glossary
+```
 
-The Overview also shows the *ideal production timeline* — a reference Gantt
-of typical market durations per stage, every bar linked to its source.
+- **Home** (`#/home`) IS the stage menu: the production stages in real
+  process order (design → tooling → molding → painting → …), each card with
+  a plain-English description, total spend and share. Clicking a card (or
+  opening `#/stage/tooling_molds`) opens the stage page with monthly/daily
+  spend charts (payments by invoice date, not the physical production
+  cycle), top suppliers and styles, and — on stages whose costs are tracked
+  outside this expense ledger (forensic verdict) — a **Not booked in this
+  expense ledger** plate instead of charts.
+- **Supplier cards** (`#/supplier/<name>`) show a vendor's total, share,
+  stage mix, monthly payments and styles. The blank-supplier bucket gets an
+  **Unattributed** card with a forensic explainer, not a fake vendor.
+- **Optimization** (`#/optimization/<id>`) and **benchmark**
+  (`#/bench/<stage_id>`) sub-screens carry the full what-to-do / savings
+  math / market ranges and their sources.
+- The **ideal production timeline** (reference Gantt of typical market
+  durations per stage) lives on the Timelines tab; every bar links to its
+  source. The header has a **Print view** button — print mode drops the
+  interactive chrome and prints the current screen as a one-page summary.
 
 **Regenerate:** `python dashboard/build_dashboard.py` reads the report CSVs
 (`audit/stage_summary.csv`, `audit/stages.csv`, `audit/by_month_stage.csv`,
@@ -70,7 +89,11 @@ an HTML-table twin, so the page stays readable offline.
 
 **Where the data lives:** all report CSVs and the built `dist/` are
 generated artifacts on the local machine only — gitignored together with
-`data/` (raw sheets, pickles). Nothing in this repo contains real financial
-figures; `scripts/verify.py` cross-checks the embedded stage pages against
-the CSVs (series filters, per-page stats, grand-total reconciliation,
-non-empty benchmark sources) after every rebuild.
+`data/` (raw sheets, pickles); the absolute roots are in
+`config/paths.yaml`. Nothing in this repo contains real financial figures.
+`scripts/verify.py` cross-checks every rebuild: every payload route
+reconciles against its source CSVs (home stage cards vs
+stages×stage_summary, stage/supplier/optimization/benchmark pages vs their
+CSVs and reports), the Σ of the Home stage-menu cards equals the grand
+total, and the route table is complete — every screen reachable, every
+link, breadcrumb and back target resolving (no dead ends).

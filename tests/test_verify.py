@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 import pandas as pd
 from conftest import git, init_repo
 
+from action_figures.dashboard_data import (
+    IA_TABS,
+    build_benchmark_pages,
+    load_benchmarks_md,
+    load_optimizations_md,
+)
 from action_figures.verify_lib import (
     check_audit_totals,
+    check_benchmark_pages,
     check_dashboard_payload,
     check_git_hygiene,
+    check_home_reconciles,
     check_ideal_timeline,
+    check_optimization_pages,
     check_pkl_vs_manifest,
     check_qty_amount,
+    check_routes_complete,
     check_stage_pages,
+    check_supplier_pages,
     check_zh_en_parity,
     format_report,
     run_checks,
@@ -418,6 +430,26 @@ def write_stage_page_reports(tmp_path):
     ).to_csv(audit / "by_supplier_stage.csv", index=False)
     pd.DataFrame(
         [
+            {"supplier": "杭州宏达", "month": "2026-01", "amount_cny": 20.0},
+            # duplicate (supplier, month) rows exist in the real export:
+            # the builder sums them, the check must mirror that
+            {"supplier": "杭州宏达", "month": "2026-01", "amount_cny": 5.0},
+            {"supplier": "东莞精密", "month": "2026-02", "amount_cny": 10.0},
+            {"supplier": "", "month": "2026-01", "amount_cny": 20.0},
+        ]
+    ).to_csv(audit / "by_supplier_month.csv", index=False)
+    pd.DataFrame(
+        [
+            {"supplier": "杭州宏达", "style_no": "AF-1", "amount_cny": 18.0,
+             "n_lines": 1},
+            {"supplier": "东莞精密", "style_no": "AF-2", "amount_cny": 12.0,
+             "n_lines": 1},
+            {"supplier": "", "style_no": "AF-1", "amount_cny": 20.0,
+             "n_lines": 2},
+        ]
+    ).to_csv(audit / "by_supplier_style.csv", index=False)
+    pd.DataFrame(
+        [
             {"stage_id": "design_prototyping", "order": 1, "label_en": "Design",
              "description_en": "d", "zh_keys": "设计"},
             {"stage_id": "packaging", "order": 8, "label_en": "Packaging",
@@ -728,3 +760,584 @@ class TestRunChecksAndReport:
         results = run_checks(tmp_path, tmp_path / "reports", repo, tmp_path / "dist" / "index.html")
         assert any(r.status == "fail" for r in results)
         assert "FAIL" in format_report(results)
+
+
+# ------------------------------------------------- executive IA (GH#31) -----
+
+
+def write_optimization_md(tmp_path):
+    """Synthetic optimization.md: ranked table + rec sections + stage shares."""
+    opt_dir = tmp_path / "reports" / "optimization"
+    opt_dir.mkdir(parents=True)
+    (opt_dir / "optimization.md").write_text(
+        "# Optimization recommendations\n"
+        "\n"
+        "| # | Recommendation | Saving | Prob | Score | Time | Effort |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| 1 | Consolidate tooling orders | 12,000 | 60.0% | 7.2"
+        " | 2 weeks | medium |\n"
+        "| 2 | Merge freight runs | 8,000 | 50.0% | 4.0 | 1 week | low |\n"
+        "\n"
+        "### 1) Consolidate tooling orders\n"
+        "**What to do:** batch the orders.\n"
+        "**Savings math:** 3 molds -> 1.\n"
+        "\n"
+        "### 2) Merge freight runs\n"
+        "**What to do:** share trucks.\n"
+        "\n"
+        "## Stage shares vs market\n"
+        "\n"
+        "| Stage | Our share | H1-2026 | Market reference |\n"
+        "|---|---|---|---|\n"
+        "| design_prototyping | 60.0% | 30,000 | typically 50-60% of spend |\n",
+        encoding="utf-8",
+    )
+
+
+def write_benchmark_mds(tmp_path):
+    """Synthetic benchmarks/<stage>.md pair (the real per-stage md format)."""
+    bdir = tmp_path / "reports" / "benchmarks"
+    bdir.mkdir(parents=True)
+    (bdir / "tooling_molds.md").write_text(
+        "# Benchmark: Tooling & Molds (injection tooling)\n"
+        "\n"
+        "Tooling is the largest one-off investment.\n"
+        "\n"
+        "## Typical ranges\n"
+        "\n"
+        "- Steel mold **1,000-5,000** per cavity, acc. 2026-08-01\n"
+        "\n"
+        "Sources:\n"
+        "\n"
+        "1. https://example.com/tooling — Tooling price survey, acc. 2026-08-01\n",
+        encoding="utf-8",
+    )
+    (bdir / "design_prototyping.md").write_text(
+        "# Benchmark: Design & Prototyping\n"
+        "\n"
+        "Design is paid per model.\n"
+        "\n"
+        "## Typical ranges\n"
+        "\n"
+        "- Concept art **50-200** per part, acc. 2026-08-02\n",
+        encoding="utf-8",
+    )
+
+
+def exec_payload(tmp_path):
+    """Full executive-IA payload consistent with write_stage_page_reports.
+
+    home / ia / supplier_pages / optimization_pages / benchmark_pages are
+    built from the same synthetic reports the stage-pages fixtures use.
+    """
+    write_optimization_md(tmp_path)
+    write_benchmark_mds(tmp_path)
+    payload = stage_pages_payload()
+    menu = payload["stages"]
+    payload["home"] = {
+        "lead": "synthetic lead",
+        "stage_cards": menu,
+        "deepdive_links": [
+            {"id": t, "label": t.title(), "href": f"#/tab/{t}"} for t in IA_TABS
+        ],
+    }
+    payload["ia"] = {
+        "default_hash": "#/home",
+        "redirects": {"#/overview": "#/home"},
+        "routes": [
+            {"hash": "#/home", "screen": "home", "title": "Home",
+             "crumbs": ["Home"]},
+        ]
+        + [
+            {"hash": f"#/tab/{t}", "screen": t, "title": t.title(),
+             "crumbs": ["Home", t.title()]}
+            for t in IA_TABS
+        ],
+        "stage_crumbs": ["Home", "Process"],
+    }
+    payload["supplier_pages"] = {
+        "杭州宏达": {
+            "label": "Hangzhou Hongda (杭州宏达)", "is_unattributed": False,
+            "forensics": "",
+            "stats": {"total_cny": 20.0, "share_pct": 40.0,
+                      "months_active": 1, "n_lines": 1},
+            "stage_mix": [{"stage": "design_prototyping", "amount_cny": 20.0}],
+            "months": [{"month": "2026-01", "amount_cny": 25.0}],
+            "top_styles": [{"style_no": "AF-1", "amount_cny": 18.0,
+                            "n_lines": 1}],
+        },
+        "东莞精密": {
+            "label": "东莞精密", "is_unattributed": False, "forensics": "",
+            "stats": {"total_cny": 10.0, "share_pct": 20.0,
+                      "months_active": 1, "n_lines": 1},
+            "stage_mix": [{"stage": "design_prototyping", "amount_cny": 10.0}],
+            "months": [{"month": "2026-02", "amount_cny": 10.0}],
+            "top_styles": [{"style_no": "AF-2", "amount_cny": 12.0,
+                            "n_lines": 1}],
+        },
+        "Unattributed": {
+            "label": "Unattributed", "is_unattributed": True,
+            "forensics": "synthetic explainer",
+            "stats": {"total_cny": 20.0, "share_pct": 40.0,
+                      "months_active": 1, "n_lines": 2},
+            "stage_mix": [{"stage": "packaging", "amount_cny": 20.0}],
+            "months": [{"month": "2026-01", "amount_cny": 20.0}],
+            "top_styles": [{"style_no": "AF-1", "amount_cny": 20.0,
+                            "n_lines": 2}],
+        },
+    }
+    opt = load_optimizations_md(tmp_path / "reports" / "optimization" / "optimization.md")
+    payload["optimizations"] = opt
+    payload["optimization_pages"] = {c["id"]: c for c in opt["cards"]}
+    bench = load_benchmarks_md(tmp_path / "reports" / "benchmarks")
+    payload["benchmarks"] = {"rows": [], "stages": bench}
+    payload["benchmark_pages"] = build_benchmark_pages(
+        bench, opt["market_comparison"]
+    )
+    return payload
+
+
+def exec_html(payload):
+    """Mini dist/index.html: nav + menus + catalogs + back links + payload."""
+    tabs = "".join(f'<a href="#/tab/{t}">{t}</a>' for t in IA_TABS)
+    stages = "".join(
+        f'<li><a href="#/stage/{s["stage_id"]}">{s["label_en"]}</a></li>'
+        for s in payload["stages"]
+    )
+    suppliers = "".join(
+        f'<li><a href="#/supplier/{quote(n)}">{n}</a></li>'
+        for n in payload["supplier_pages"]
+    )
+    opts = "".join(
+        f'<li><a href="#/optimization/{i}">#{i}</a></li>'
+        for i in payload["optimization_pages"]
+    )
+    bench = "".join(
+        f'<li><a href="#/bench/{s}">{s}</a></li>'
+        for s in payload["benchmark_pages"]
+    )
+    return (
+        "<html><head><title>synthetic</title></head><body>"
+        f'<a id="back-link" href="#/home">Back</a>'
+        f"<nav>{tabs}</nav>"
+        f'<ul id="stage-menu">{stages}</ul>'
+        f"<ul>{suppliers}</ul>"
+        f"<ul>{opts}</ul>"
+        f"<ul>{bench}</ul>"
+        '<p><a class="back" href="#/home">back</a></p>'
+        '<p><a class="back" href="#/tab/suppliers">back</a></p>'
+        '<p><a class="back" href="#/tab/optimizations">back</a></p>'
+        '<p><a class="back" href="#/tab/benchmarks">back</a></p>'
+        '<script id="dash-data" type="application/json">'
+        f"{json.dumps(payload)}</script>"
+        "</body></html>"
+    )
+
+
+def write_exec_dist(tmp_path, payload, html=None):
+    dist = tmp_path / "dist"
+    dist.mkdir(exist_ok=True)
+    (dist / "index.html").write_text(html or exec_html(payload), encoding="utf-8")
+    return dist / "index.html"
+
+
+class TestHomeReconciles:
+    def test_matching_payload_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_exec_dist(tmp_path, exec_payload(tmp_path))
+        res = check_home_reconciles(dist, tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        res = check_home_reconciles(
+            tmp_path / "dist" / "index.html", tmp_path / "reports"
+        )
+        assert res.status == "pending"
+
+    def test_missing_summary_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        (tmp_path / "reports" / "audit" / "stage_summary.csv").unlink()
+        res = check_home_reconciles(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "pending"
+
+    def test_card_amount_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["home"]["stage_cards"][0]["amount_cny"] = 99.0
+        res = check_home_reconciles(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("design_prototyping" in d for d in res.details)
+
+    def test_card_sum_ne_grand_total_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["home"]["stage_cards"] = payload["home"]["stage_cards"][:1]
+        res = check_home_reconciles(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("grand total" in d for d in res.details)
+
+    def test_menu_order_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["home"]["stage_cards"] = list(
+            reversed(payload["home"]["stage_cards"])
+        )
+        res = check_home_reconciles(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("order" in d for d in res.details)
+
+    def test_share_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["home"]["stage_cards"][1]["share_pct"] = 99.0
+        res = check_home_reconciles(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("share_pct" in d for d in res.details)
+
+    def test_no_home_section_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        del payload["home"]
+        res = check_home_reconciles(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+
+
+class TestSupplierPagesCheck:
+    def test_matching_payload_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_exec_dist(tmp_path, exec_payload(tmp_path))
+        res = check_supplier_pages(dist, tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        res = check_supplier_pages(
+            tmp_path / "dist" / "index.html", tmp_path / "reports"
+        )
+        assert res.status == "pending"
+
+    def test_missing_month_csv_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        (tmp_path / "reports" / "audit" / "by_supplier_month.csv").unlink()
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "pending"
+
+    def test_total_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["supplier_pages"]["杭州宏达"]["stats"]["total_cny"] = 21.0
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("杭州宏达" in d for d in res.details)
+
+    def test_month_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["supplier_pages"]["东莞精密"]["months"] = []
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("months" in d for d in res.details)
+
+    def test_style_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["supplier_pages"]["杭州宏达"]["top_styles"] = []
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("top_styles" in d for d in res.details)
+
+    def test_stage_mix_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["supplier_pages"]["Unattributed"]["stage_mix"] = [
+            {"stage": "design_prototyping", "amount_cny": 20.0}
+        ]
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("stage_mix" in d for d in res.details)
+
+    def test_missing_page_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        del payload["supplier_pages"]["东莞精密"]
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+
+    def test_extra_page_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["supplier_pages"]["Ghost Vendor"] = dict(
+            payload["supplier_pages"]["东莞精密"]
+        )
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("Ghost Vendor" in d for d in res.details)
+
+    def test_n_lines_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["supplier_pages"]["Unattributed"]["stats"]["n_lines"] = 5
+        res = check_supplier_pages(write_exec_dist(tmp_path, payload),
+                                   tmp_path / "reports")
+        assert res.status == "fail"
+
+
+class TestOptimizationPagesCheck:
+    def test_md_source_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_exec_dist(tmp_path, exec_payload(tmp_path))
+        res = check_optimization_pages(dist, tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_csv_source_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        cards = payload["optimizations"]["cards"]
+        pd.DataFrame(
+            [
+                {"id": c["id"], "title": c["title"],
+                 "stage": "design_prototyping",
+                 "baseline_cny": 0.0, "saving_cny": c["saving_cny"],
+                 "proof": "synthetic"}
+                for c in cards
+            ]
+        ).to_csv(tmp_path / "reports" / "optimization" / "optimizations.csv",
+                 index=False)
+        res = check_optimization_pages(write_exec_dist(tmp_path, payload),
+                                       tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        res = check_optimization_pages(
+            tmp_path / "dist" / "index.html", tmp_path / "reports"
+        )
+        assert res.status == "pending"
+
+    def test_missing_source_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        (tmp_path / "reports" / "optimization" / "optimization.md").unlink()
+        res = check_optimization_pages(write_exec_dist(tmp_path, payload),
+                                       tmp_path / "reports")
+        assert res.status == "pending"
+
+    def test_missing_page_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        del payload["optimization_pages"]["2"]
+        res = check_optimization_pages(write_exec_dist(tmp_path, payload),
+                                       tmp_path / "reports")
+        assert res.status == "fail"
+
+    def test_saving_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["optimization_pages"]["1"]["saving_cny"] = 999.0
+        res = check_optimization_pages(write_exec_dist(tmp_path, payload),
+                                       tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("saving" in d for d in res.details)
+
+    def test_title_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["optimization_pages"]["2"]["title"] = "Renamed"
+        res = check_optimization_pages(write_exec_dist(tmp_path, payload),
+                                       tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("title" in d for d in res.details)
+
+    def test_stale_md_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        md = tmp_path / "reports" / "optimization" / "optimization.md"
+        md.write_text(md.read_text(encoding="utf-8").replace("12,000", "13,500"),
+                      encoding="utf-8")
+        res = check_optimization_pages(write_exec_dist(tmp_path, payload),
+                                       tmp_path / "reports")
+        assert res.status == "fail"
+
+
+class TestBenchmarkPagesCheck:
+    def test_md_source_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_exec_dist(tmp_path, exec_payload(tmp_path))
+        res = check_benchmark_pages(dist, tmp_path / "reports")
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        res = check_benchmark_pages(
+            tmp_path / "dist" / "index.html", tmp_path / "reports"
+        )
+        assert res.status == "pending"
+
+    def test_missing_source_pending(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        for md in (tmp_path / "reports" / "benchmarks").glob("*.md"):
+            md.unlink()
+        res = check_benchmark_pages(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "pending"
+
+    def test_missing_page_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        del payload["benchmark_pages"]["design_prototyping"]
+        res = check_benchmark_pages(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+
+    def test_our_join_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["benchmark_pages"]["design_prototyping"]["our"][
+            "h1_2026_cny"
+        ] = 999.0
+        res = check_benchmark_pages(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("our" in d for d in res.details)
+
+    def test_our_must_be_null_when_not_in_comparison(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["benchmark_pages"]["tooling_molds"]["our"] = {
+            "share_pct": 10.0, "h1_2026_cny": 5.0, "market_ref": "x"
+        }
+        res = check_benchmark_pages(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+
+    def test_highlights_drift_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["benchmark_pages"]["tooling_molds"]["highlights"] = []
+        res = check_benchmark_pages(write_exec_dist(tmp_path, payload),
+                                    tmp_path / "reports")
+        assert res.status == "fail"
+        assert any("highlights" in d for d in res.details)
+
+
+class TestRoutesComplete:
+    def test_routes_ok(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_exec_dist(tmp_path, exec_payload(tmp_path))
+        res = check_routes_complete(dist)
+        assert res.status == "ok", res.details
+
+    def test_missing_dist_pending(self, tmp_path):
+        res = check_routes_complete(tmp_path / "dist" / "index.html")
+        assert res.status == "pending"
+
+    def test_no_ia_section_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        del payload["ia"]
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+
+    def test_bad_default_hash_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["ia"]["default_hash"] = "#/nowhere"
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+        assert any("default_hash" in d for d in res.details)
+
+    def test_redirect_to_unknown_hash_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["ia"]["redirects"] = {"#/overview": "#/ghost"}
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+        assert any("redirect" in d for d in res.details)
+
+    def test_duplicate_route_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["ia"]["routes"].append(dict(payload["ia"]["routes"][1]))
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+
+    def test_missing_tab_route_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["ia"]["routes"] = [
+            r for r in payload["ia"]["routes"] if r["hash"] != "#/tab/glossary"
+        ]
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+        assert any("glossary" in d for d in res.details)
+
+    def test_route_without_crumbs_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["ia"]["routes"][1]["crumbs"] = []
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+        assert any("crumbs" in d for d in res.details)
+
+    def test_dead_link_in_html_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        html = exec_html(payload).replace(
+            "</body>", '<a href="#/stage/ghost_stage">dead</a></body>'
+        )
+        res = check_routes_complete(write_exec_dist(tmp_path, payload, html))
+        assert res.status == "fail"
+        assert any("ghost_stage" in d for d in res.details)
+
+    def test_unreachable_supplier_page_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        name = quote("东莞精密")
+        html = exec_html(payload).replace(
+            f'<li><a href="#/supplier/{name}">东莞精密</a></li>', ""
+        )
+        assert f"#/supplier/{name}" not in html  # link really gone
+        res = check_routes_complete(write_exec_dist(tmp_path, payload, html))
+        assert res.status == "fail"
+        assert any("东莞精密" in d for d in res.details)
+
+    def test_deepdive_link_to_unknown_tab_fails(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        payload = exec_payload(tmp_path)
+        payload["home"]["deepdive_links"].append(
+            {"id": "ghost", "label": "Ghost", "href": "#/tab/ghost"}
+        )
+        res = check_routes_complete(write_exec_dist(tmp_path, payload))
+        assert res.status == "fail"
+        assert any("ghost" in d for d in res.details)
+
+
+class TestExecutiveRunChecks:
+    def test_run_checks_includes_new_checks(self, tmp_path):
+        write_stage_page_reports(tmp_path)
+        dist = write_exec_dist(tmp_path, exec_payload(tmp_path))
+        results = {r.name: r for r in run_checks(
+            tmp_path, tmp_path / "reports", tmp_path, dist
+        )}
+        for name in ("home_reconciles", "supplier_pages", "optimization_pages",
+                     "benchmark_pages", "routes_complete"):
+            assert name in results, name
+        report = format_report(list(results.values()))
+        assert "routes_complete" in report

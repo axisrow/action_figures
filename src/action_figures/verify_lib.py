@@ -18,10 +18,19 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 import pandas as pd
 
-from action_figures.dashboard_data import NOT_BOOKED_STAGES
+from action_figures.dashboard_data import (
+    IA_TABS,
+    NOT_BOOKED_STAGES,
+    _benchmarks_stages_from_rows,
+    load_benchmarks,
+    load_benchmarks_md,
+    load_optimizations,
+    load_optimizations_md,
+)
 
 OK = "ok"
 FAIL = "fail"
@@ -615,6 +624,548 @@ def check_stage_pages(dist_html: Path, reports_root: Path, tol: float = TOL) -> 
     )
 
 
+def check_home_reconciles(dist_html: Path, reports_root: Path, tol: float = TOL) -> CheckResult:
+    """(4d) payload.home.stage_cards == stages.csv × stage_summary.csv (EI-2/GH#31).
+
+    The Home screen IS the stage menu, so its cards must be the stages.csv
+    rows in process order with the stage_summary numbers (amount ± tol,
+    n_lines exact, share ± 0.05) — and their sum must equal the grand total
+    of stage_summary.csv.
+    """
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("home_reconciles", PENDING, error)
+    home = payload.get("home")
+    if not isinstance(home, dict) or not isinstance(home.get("stage_cards"), list):
+        return CheckResult(
+            "home_reconciles", FAIL, "payload has no home.stage_cards section"
+        )
+    reports_root = Path(reports_root)
+    summary_path = reports_root / "audit" / "stage_summary.csv"
+    stages_path = reports_root / "audit" / "stages.csv"
+    missing = [p.name for p in (summary_path, stages_path) if not p.exists()]
+    if missing:
+        return CheckResult(
+            "home_reconciles", PENDING, f"missing CSVs: {', '.join(missing)}"
+        )
+    summary = pd.read_csv(summary_path)
+    meta = pd.read_csv(stages_path)
+    summary_map = {
+        r["stage"]: (round(float(r["amount_cny"]), 2), int(r["n_lines"]),
+                     float(r["share_pct"]))
+        for _, r in summary.iterrows()
+    }
+    meta_ids = [r["stage_id"] for _, r in meta.iterrows()]
+
+    details: list[str] = []
+    ok = True
+    card_ids: list[str] = []
+    cards_sum = 0.0
+    for card in home["stage_cards"]:
+        sid = card.get("stage_id")
+        card_ids.append(sid)
+        amount = round(float(card.get("amount_cny", 0.0)), 2)
+        cards_sum += amount
+        exp_amount, exp_lines, exp_share = summary_map.get(sid, (0.0, 0, 0.0))
+        if abs(amount - exp_amount) > tol:
+            ok = False
+            details.append(
+                f"{sid}: card amount {amount} != stage_summary {exp_amount}"
+            )
+        if int(card.get("n_lines", -1)) != exp_lines:
+            ok = False
+            details.append(f"{sid}: card n_lines != stage_summary")
+        if abs(float(card.get("share_pct", -1.0)) - exp_share) > 0.05:
+            ok = False
+            details.append(f"{sid}: card share_pct != stage_summary")
+    absent = [s for s in summary["stage"] if s not in card_ids]
+    if absent:
+        ok = False
+        details.append(
+            f"stage_summary stages missing from the home menu: {', '.join(absent)}"
+        )
+    if card_ids != meta_ids:
+        ok = False
+        details.append("home menu order != stages.csv process order")
+
+    grand_total = round(float(summary["amount_cny"].sum()), 2)
+    if abs(round(cards_sum, 2) - grand_total) > tol:
+        ok = False
+        details.append(
+            f"Σ home stage cards {round(cards_sum, 2)} != grand total {grand_total}"
+        )
+    return CheckResult(
+        "home_reconciles",
+        OK if ok else FAIL,
+        f"home.stage_cards == stages.csv order × stage_summary rows "
+        f"({len(card_ids)} cards); Σ cards == grand total {grand_total:.2f}",
+        details,
+    )
+
+
+def _supplier_catalog(reports_root: Path) -> tuple[dict | None, str]:
+    """by_supplier_stage.csv aggregated like the catalog (blank -> Unattributed).
+
+    Returns ({name: {amount, n_lines, mix, months}}, "") or (None, error)
+    when the CSV is missing. Supports both layouts load_suppliers accepts.
+    """
+    path = Path(reports_root) / "audit" / "by_supplier_stage.csv"
+    if not path.exists():
+        return None, "by_supplier_stage.csv missing"
+    df = pd.read_csv(path, keep_default_na=False)
+    aggregated = "months_active" in df.columns
+    agg: dict[str, dict] = {}
+    for r in df.itertuples():
+        name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
+        entry = agg.setdefault(
+            name, {"amount": 0.0, "n_lines": 0, "mix": {}, "months": set()}
+        )
+        amount = float(r.amount_cny)
+        entry["amount"] += amount
+        entry["mix"][r.stage] = entry["mix"].get(r.stage, 0.0) + amount
+        if aggregated:
+            entry["months"].update(
+                m for m in str(r.months_active).split(";") if m.strip()
+            )
+            entry["n_lines"] += int(r.n_lines)
+        else:
+            entry["months"].add(str(r.month))
+            entry["n_lines"] += 1
+    return agg, ""
+
+
+def check_supplier_pages(
+    dist_html: Path, reports_root: Path, tol: float = TOL
+) -> CheckResult:
+    """(4e) payload.supplier_pages == supplier CSVs (EI-3/GH#28, GH#31).
+
+    Every supplier of by_supplier_stage.csv (blank bucket as Unattributed)
+    must have exactly one page whose stats (total ± tol, n_lines, months
+    active), stage_mix, monthly series (by_supplier_month.csv) and styles
+    (by_supplier_style.csv, blank styles dropped) match the CSV rows — and
+    no page may exist for a supplier outside the catalog.
+    """
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("supplier_pages", PENDING, error)
+    pages = payload.get("supplier_pages")
+    if pages is None:
+        return CheckResult("supplier_pages", FAIL, "payload has no supplier_pages section")
+    reports_root = Path(reports_root)
+    month_path = reports_root / "audit" / "by_supplier_month.csv"
+    style_path = reports_root / "audit" / "by_supplier_style.csv"
+    missing = [p.name for p in (month_path, style_path) if not p.exists()]
+    catalog, cat_error = _supplier_catalog(reports_root)
+    if catalog is None:
+        missing.append(cat_error)
+    if missing:
+        return CheckResult(
+            "supplier_pages", PENDING, f"missing CSVs: {', '.join(missing)}"
+        )
+
+    details: list[str] = []
+    ok = True
+
+    months_map: dict[str, dict[str, float]] = {}
+    for r in pd.read_csv(month_path, keep_default_na=False).itertuples():
+        name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
+        # duplicate (supplier, month) rows sum, mirroring the builder's
+        # load_by_supplier_month aggregation
+        series = months_map.setdefault(name, {})
+        series[str(r.month)] = series.get(str(r.month), 0.0) + float(r.amount_cny)
+
+    styles_map: dict[str, list[dict]] = {}
+    for r in pd.read_csv(style_path, keep_default_na=False).itertuples():
+        name = str(r.supplier).strip() or UNATTRIBUTED_LABEL
+        if not str(r.style_no).strip():
+            continue
+        styles_map.setdefault(name, []).append(
+            {"style_no": _norm_style(r.style_no), "amount_cny": float(r.amount_cny)}
+        )
+
+    extra = sorted(set(pages) - set(catalog))
+    if extra:
+        ok = False
+        details.append(f"supplier pages outside the catalog: {', '.join(extra)}")
+    for name, expected in catalog.items():
+        page = pages.get(name)
+        if page is None:
+            ok = False
+            details.append(f"{name}: missing from payload.supplier_pages")
+            continue
+        stats = page.get("stats") or {}
+        stats_ok = (
+            abs(float(stats.get("total_cny", -1)) - round(expected["amount"], 2)) <= tol
+            and int(stats.get("n_lines", -1)) == expected["n_lines"]
+            and int(stats.get("months_active", -1)) == len(expected["months"])
+        )
+        if not stats_ok:
+            ok = False
+            details.append(f"{name}: stats != by_supplier_stage.csv row")
+
+        exp_mix = sorted(expected["mix"].items(), key=lambda t: (-t[1], t[0]))
+        got_mix = sorted(
+            ((m["stage"], float(m["amount_cny"])) for m in page.get("stage_mix") or []),
+            key=lambda t: (-t[1], t[0]),
+        )
+        if not _series_matches(got_mix, exp_mix, tol):
+            ok = False
+            details.append(f"{name}: stage_mix != by_supplier_stage.csv filter")
+
+        month_series = months_map.get(name, {})
+        exp_months = [(m, round(month_series[m], 2)) for m in sorted(month_series)]
+        got_months = [
+            (m["month"], round(float(m["amount_cny"]), 2))
+            for m in page.get("months") or []
+        ]
+        if not _series_matches(got_months, exp_months, tol):
+            ok = False
+            details.append(f"{name}: months != by_supplier_month.csv filter")
+
+        exp_styles = sorted(
+            styles_map.get(name, []),
+            key=lambda r: (-r["amount_cny"], r["style_no"]),
+        )
+        got_styles = sorted(
+            (
+                {"style_no": r["style_no"], "amount_cny": float(r["amount_cny"])}
+                for r in page.get("top_styles") or []
+            ),
+            key=lambda r: (-r["amount_cny"], r["style_no"]),
+        )
+        if not _series_matches(
+            [(r["style_no"], r["amount_cny"]) for r in got_styles],
+            [(r["style_no"], round(r["amount_cny"], 2)) for r in exp_styles],
+            tol,
+        ):
+            ok = False
+            details.append(f"{name}: top_styles != by_supplier_style.csv filter")
+
+    return CheckResult(
+        "supplier_pages",
+        OK if ok else FAIL,
+        f"supplier_pages == catalog CSVs for {len(catalog)} suppliers "
+        "(stats / stage_mix / months / styles)",
+        details,
+    )
+
+
+def check_optimization_pages(
+    dist_html: Path, reports_root: Path, tol: float = TOL
+) -> CheckResult:
+    """(4f) payload.optimization_pages == cards == optimization source (GH#29/31).
+
+    The detail sub-screens (keyed by recommendation id) must be exactly the
+    payload's optimization cards, and those cards must match the source on
+    disk (optimizations.csv when present, else optimization.md) on ids,
+    titles and estimated savings.
+    """
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("optimization_pages", PENDING, error)
+    cards = (payload.get("optimizations") or {}).get("cards")
+    pages = payload.get("optimization_pages")
+    if cards is None:
+        return CheckResult(
+            "optimization_pages", FAIL, "payload has no optimizations.cards section"
+        )
+    if pages is None:
+        return CheckResult(
+            "optimization_pages", FAIL, "payload has no optimization_pages section"
+        )
+    if not cards:
+        return CheckResult(
+            "optimization_pages", PENDING, "no recommendation cards in the payload"
+        )
+    reports_root = Path(reports_root)
+    csv_path = reports_root / "optimization" / "optimizations.csv"
+    md_path = reports_root / "optimization" / "optimization.md"
+    if csv_path.exists():
+        source = load_optimizations(csv_path)
+        src_name = "optimizations.csv"
+    elif md_path.exists():
+        source = load_optimizations_md(md_path)["cards"]
+        src_name = "optimization.md"
+    else:
+        return CheckResult(
+            "optimization_pages",
+            PENDING,
+            "no optimization source (optimizations.csv / optimization.md)",
+        )
+
+    details: list[str] = []
+    ok = True
+    source_map = {c["id"]: c for c in source}
+    card_map = {c["id"]: c for c in cards}
+    if set(source_map) != set(card_map):
+        ok = False
+        details.append(
+            f"recommendation ids != {src_name} "
+            f"(payload {len(card_map)} vs source {len(source_map)})"
+        )
+    for cid in sorted(set(source_map) & set(card_map)):
+        src, card = source_map[cid], card_map[cid]
+        if str(src.get("title", "")).strip() != str(card.get("title", "")).strip():
+            ok = False
+            details.append(f"#{cid}: title != {src_name}")
+        if abs(float(card.get("saving_cny", 0.0)) - float(src.get("saving_cny", 0.0))) > tol:
+            ok = False
+            details.append(f"#{cid}: saving_cny != {src_name}")
+
+    page_ids = set(pages)
+    absent = sorted(set(card_map) - page_ids)
+    if absent:
+        ok = False
+        details.append(f"no optimization page for cards: {', '.join(absent)}")
+    extra = sorted(page_ids - set(card_map))
+    if extra:
+        ok = False
+        details.append(f"optimization pages outside the cards: {', '.join(extra)}")
+    for cid, page in pages.items():
+        card = card_map.get(cid)
+        if card is None:
+            continue
+        if str(page.get("title", "")) != str(card.get("title", "")):
+            ok = False
+            details.append(f"#{cid}: page title != card title")
+        if abs(float(page.get("saving_cny", 0.0)) - float(card.get("saving_cny", 0.0))) > tol:
+            ok = False
+            details.append(f"#{cid}: page saving_cny != card")
+
+    return CheckResult(
+        "optimization_pages",
+        OK if ok else FAIL,
+        f"optimization_pages == cards == {src_name} ({len(card_map)} recommendations)",
+        details,
+    )
+
+
+def check_benchmark_pages(dist_html: Path, reports_root: Path) -> CheckResult:
+    """(4g) payload.benchmark_pages == cards == benchmark source (GH#29/31).
+
+    The per-stage benchmark sub-screens must be exactly the payload's
+    benchmark cards, which must match the source on disk (benchmarks.csv
+    when present, else benchmarks/*.md); the joined ``our`` numbers must
+    appear exactly for the stages of the market-comparison table and
+    nowhere else.
+    """
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("benchmark_pages", PENDING, error)
+    cards = (payload.get("benchmarks") or {}).get("stages")
+    pages = payload.get("benchmark_pages")
+    if cards is None:
+        return CheckResult(
+            "benchmark_pages", FAIL, "payload has no benchmarks.stages section"
+        )
+    if pages is None:
+        return CheckResult(
+            "benchmark_pages", FAIL, "payload has no benchmark_pages section"
+        )
+    if not cards:
+        return CheckResult(
+            "benchmark_pages", PENDING, "no benchmark stage cards in the payload"
+        )
+    reports_root = Path(reports_root)
+    csv_path = reports_root / "benchmarks" / "benchmarks.csv"
+    md_dir = reports_root / "benchmarks"
+    if csv_path.exists():
+        source = _benchmarks_stages_from_rows(load_benchmarks(csv_path))
+        src_name = "benchmarks.csv"
+    elif md_dir.is_dir() and any(md_dir.glob("*.md")):
+        source = load_benchmarks_md(md_dir)
+        src_name = "benchmarks/*.md"
+    else:
+        return CheckResult(
+            "benchmark_pages",
+            PENDING,
+            "no benchmark source (benchmarks.csv / benchmarks/*.md)",
+        )
+
+    details: list[str] = []
+    ok = True
+    source_map = {c["stage"]: c for c in source}
+    card_map = {c["stage"]: c for c in cards}
+    if set(source_map) != set(card_map):
+        ok = False
+        details.append(
+            f"benchmark stage set != {src_name} "
+            f"(payload {len(card_map)} vs source {len(source_map)})"
+        )
+    for stage in sorted(set(source_map) & set(card_map)):
+        src, card = source_map[stage], card_map[stage]
+        if str(src.get("title", "")) != str(card.get("title", "")):
+            ok = False
+            details.append(f"{stage}: title != {src_name}")
+        if list(src.get("highlights") or []) != list(card.get("highlights") or []):
+            ok = False
+            details.append(f"{stage}: highlights != {src_name}")
+        if [s.get("url") for s in src.get("sources") or []] != [
+            s.get("url") for s in card.get("sources") or []
+        ]:
+            ok = False
+            details.append(f"{stage}: sources != {src_name}")
+
+    if set(pages) != set(card_map):
+        ok = False
+        absent = sorted(set(card_map) - set(pages))
+        extra = sorted(set(pages) - set(card_map))
+        if absent:
+            details.append(f"no benchmark page for stages: {', '.join(absent)}")
+        if extra:
+            details.append(f"benchmark pages outside the cards: {', '.join(extra)}")
+
+    comp = {
+        r["stage"]: r
+        for r in (payload.get("optimizations") or {}).get("market_comparison") or []
+    }
+    for stage, page in pages.items():
+        card = card_map.get(stage)
+        if card is None:
+            continue
+        if str(page.get("title", "")) != str(card.get("title", "")):
+            ok = False
+            details.append(f"{stage}: page title != card")
+        if list(page.get("highlights") or []) != list(card.get("highlights") or []):
+            ok = False
+            details.append(f"{stage}: page highlights != card")
+        row = comp.get(stage)
+        our = page.get("our")
+        if row is None:
+            if our is not None:
+                ok = False
+                details.append(
+                    f"{stage}: page joins 'our' numbers but the stage is not "
+                    "in the comparison table"
+                )
+        elif not isinstance(our, dict):
+            ok = False
+            details.append(f"{stage}: page misses 'our' numbers from the comparison")
+        else:
+            if abs(float(our.get("share_pct", -1)) - float(row["our_share_pct"])) > 0.05:
+                ok = False
+                details.append(f"{stage}: our share_pct != comparison table")
+            if abs(float(our.get("h1_2026_cny", -1)) - float(row["h1_2026_cny"])) > TOL:
+                ok = False
+                details.append(f"{stage}: our h1_2026_cny != comparison table")
+
+    return CheckResult(
+        "benchmark_pages",
+        OK if ok else FAIL,
+        f"benchmark_pages == cards == {src_name}; 'our' joins == comparison "
+        f"table ({len(card_map)} stages)",
+        details,
+    )
+
+
+HREF_RE = re.compile(r'href="#/([^"]*)"')
+
+# back targets the router and the static HTML hard-wire per detail screen
+DETAIL_BACK_PREFIXES = ("#/stage/", "#/supplier/", "#/optimization/", "#/bench/")
+
+
+def check_routes_complete(dist_html: Path) -> CheckResult:
+    """(4h) no dead ends: every screen reachable, every link/back target valid.
+
+    The ia route table must cover Home + every deep-dive tab with unique
+    hashes, a valid default_hash, resolvable redirect targets and non-empty
+    breadcrumbs; every href="#/…" in the rendered HTML must resolve to a
+    shell route, a redirect or a payload-backed detail screen; and every
+    stage/supplier/optimization/benchmark page must be linked from the page
+    at least once (reachable). The shell back link must exist.
+    """
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("routes_complete", PENDING, error)
+    ia = payload.get("ia")
+    if not isinstance(ia, dict) or not ia.get("routes"):
+        return CheckResult("routes_complete", FAIL, "payload has no ia route table")
+
+    details: list[str] = []
+    ok = True
+    routes = ia["routes"]
+    hashes = [str(r.get("hash", "")) for r in routes]
+    dupes = sorted({h for h in hashes if hashes.count(h) > 1 and h})
+    if dupes:
+        ok = False
+        details.append(f"duplicate route hashes: {', '.join(dupes)}")
+    route_set = set(hashes)
+    default_hash = ia.get("default_hash")
+    if default_hash not in route_set:
+        ok = False
+        details.append(f"default_hash {default_hash!r} is not a route")
+    for src, dst in (ia.get("redirects") or {}).items():
+        if dst not in route_set:
+            ok = False
+            details.append(f"redirect {src} -> unknown target {dst}")
+    for route in routes:
+        h = route.get("hash", "?")
+        if not route.get("screen"):
+            ok = False
+            details.append(f"{h}: route has no screen")
+        crumbs = route.get("crumbs")
+        if not isinstance(crumbs, list) or not crumbs:
+            ok = False
+            details.append(f"{h}: route has no breadcrumbs")
+    tab_routes = {f"#/tab/{t}" for t in IA_TABS}
+    absent_tabs = sorted(tab_routes - route_set)
+    if absent_tabs:
+        ok = False
+        details.append(
+            f"route table misses deep-dive tabs: {', '.join(absent_tabs)}"
+        )
+    for link in (payload.get("home") or {}).get("deepdive_links") or []:
+        if link.get("href") not in route_set:
+            ok = False
+            details.append(
+                f"home deep-dive link {link.get('href')!r} is not a route"
+            )
+
+    valid = route_set | set(ia.get("redirects") or {})
+    detail_keys: dict[str, list[str]] = {}
+    for prefix, section in (
+        ("#/stage/", "stage_pages"),
+        ("#/supplier/", "supplier_pages"),
+        ("#/optimization/", "optimization_pages"),
+        ("#/bench/", "benchmark_pages"),
+    ):
+        # hrefs are collected percent-encoded and unquoted below, so plain
+        # payload keys compare equal to what the page links at
+        keys = [str(k) for k in (payload.get(section) or {})]
+        detail_keys[prefix] = keys
+        valid.update(f"{prefix}{k}" for k in keys)
+
+    dist_html = Path(dist_html)
+    html = DASH_JSON_RE.sub("", dist_html.read_text(encoding="utf-8"))
+    hrefs = {f"#/{unquote(m)}" for m in HREF_RE.findall(html)}
+    dead = sorted(h for h in hrefs if h not in valid)
+    if dead:
+        ok = False
+        details.append(f"dead links (no such screen): {', '.join(dead[:10])}")
+    for prefix, keys in detail_keys.items():
+        linked = {h for h in hrefs if h.startswith(prefix)}
+        unlinked = [k for k in keys if f"{prefix}{k}" not in linked]
+        if unlinked:
+            ok = False
+            family = prefix.strip("#/").rstrip("/")
+            details.append(
+                f"unreachable {family} screens (no link points at them): "
+                f"{', '.join(unlinked[:5])}"
+            )
+    if 'id="back-link"' not in html:
+        ok = False
+        details.append("shell back link (#back-link) missing from the page")
+
+    n_detail = sum(len(v) for v in detail_keys.values())
+    return CheckResult(
+        "routes_complete",
+        OK if ok else FAIL,
+        f"routes complete: {len(routes)} shell routes, {n_detail} detail "
+        "screens all reachable, every link and back target resolves",
+        details,
+    )
+
+
 def check_ideal_timeline(dist_html: Path) -> CheckResult:
     """(4c) payload.ideal_timeline: bars exist, every source url/file non-empty."""
     payload, error = _load_dash_payload(dist_html)
@@ -757,6 +1308,11 @@ def run_checks(
         check_stage_totals(reports_root),
         check_dashboard_payload(dist_html, reports_root),
         check_stage_pages(dist_html, reports_root),
+        check_home_reconciles(dist_html, reports_root),
+        check_supplier_pages(dist_html, reports_root),
+        check_optimization_pages(dist_html, reports_root),
+        check_benchmark_pages(dist_html, reports_root),
+        check_routes_complete(dist_html),
         check_ideal_timeline(dist_html),
         check_git_hygiene(repo_root),
         check_qty_amount(data_root),
