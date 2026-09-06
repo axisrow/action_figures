@@ -33,6 +33,7 @@ def test_mock_data_matches_real_schema(mock_data):
         "optimizations",
         "glossary",
         "stages",
+        "stage_pages",
         "ideal_timeline",
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
@@ -337,3 +338,65 @@ def test_html_ideal_gantt_click_routes_to_stage_page(html):
     """The ideal-gantt bar click handler must navigate to #/stage/<id>."""
     ideal_js = html.split("chart-ideal", 1)[1]
     assert "location.hash = '#/stage/' +" in ideal_js
+
+
+# --- PE-3: stage page content (charts, tables, stats, plate) --------------
+
+
+def test_mock_payload_has_stage_pages_for_all_12(mock_data):
+    pages = mock_data["stage_pages"]
+    assert set(pages) == {s["stage_id"] for s in mock_data["stages"]}
+    # every booked production stage carries both series and both tables
+    tooling = pages["tooling_molds"]
+    assert tooling["months"] and tooling["days"]
+    assert tooling["top_suppliers"] and tooling["top_styles"]
+    assert set(tooling["stats"]) == {
+        "total_cny", "share_pct", "n_lines", "avg_line_cny",
+    }
+    # synthetic stand-in for the real grand-total check (¥373,437.41)
+    assert sum(p["stats"]["total_cny"] for p in pages.values()) == (
+        mock_data["overview"]["tiles"]["total_spend_cny"]
+    )
+
+
+def test_mock_stage_pages_top_lists_capped_at_10(mock_data):
+    for page in mock_data["stage_pages"].values():
+        assert len(page["top_suppliers"]) <= 11  # top-10 + Unattributed
+        assert len(page["top_styles"]) <= 10
+
+
+def test_html_stage_page_charts_and_tables_present(html):
+    assert 'id="stage-chart-monthly"' in html
+    assert 'id="stage-chart-daily"' in html
+    assert 'id="stage-tbl-suppliers"' in html
+    assert 'id="stage-tbl-styles"' in html
+
+
+def test_html_stage_page_daily_chart_smooths_with_ma7(html):
+    """The daily line carries a 7-day moving average series (calendar-filled)."""
+    assert "ma7" in html
+    assert "86400000" in html  # calendar day step when filling gaps
+
+
+def test_html_stage_page_daily_chart_guards_empty_days(html):
+    """Stages booked in stage_summary but absent from by_day_stage (mock:
+    design_prototyping) must not crash the page — dailyOption returns an
+    empty-but-valid option instead of dereferencing days[0] (PR 20 review)."""
+    fn = html.split("function dailyOption(", 1)[1].split("\n  }", 1)[0]
+    assert fn.index("if (!days.length)") < fn.index("days[0].date")
+
+
+def test_html_stage_page_header_disclaimer(html):
+    assert "payments by date, not the physical production cycle" in html
+
+
+def test_html_stage_page_not_booked_plate(html):
+    assert "Not booked in this expense ledger" in html
+    assert 'id="stage-plate"' in html
+    # the plate must not claim the page is empty while tables show residual
+    # booked rows beneath it (PR 20 review)
+    assert "residual entries" in html
+
+
+def test_html_stage_page_renders_avg_line_stat(html):
+    assert "Avg per line" in html
