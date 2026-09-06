@@ -451,29 +451,12 @@ def _render_ideal_timeline(d: dict) -> str:
 # --- per-tab renderers ----------------------------------------------------
 
 
-def _render_overview(d: dict) -> str:
+def _render_data_quality_notes(d: dict) -> str:
+    """Data-quality callouts (unclassified / unattributed spend) — shown on
+    the Home screen, where the headline numbers live."""
     ov = d["overview"]
-    tiles = ov["tiles"]
-    ex = ov.get("executive") or {}
-    tiles_html = "".join(
-        f'<div class="tile"><div class="tile-num">{val}</div>'
-        f"<div class=\"tile-label\">{label}</div></div>"
-        for label, val in [
-            ("Total spend", _fmt_cny(tiles["total_spend_cny"])),
-            ("Reimbursement lines", str(tiles["total_lines"])),
-            ("Styles tracked", str(tiles["num_styles"])),
-            ("Top stage", _label(tiles["top_stage"])),
-        ]
-    )
-    exec_html = ""
-    if ex.get("bullets"):
-        items = "".join(f"<li>{_esc(b)}</li>" for b in ex["bullets"])
-        exec_html = (
-            "<h3>Executive summary — the main takeaways</h3>"
-            f'<ul class="exec">{items}</ul>'
-        )
-    uncls = ov.get("unclassified") or {}
     note = ""
+    uncls = ov.get("unclassified") or {}
     if uncls.get("n_lines"):
         note = (
             f'<p class="lead">Data quality: {uncls["n_lines"]} expense lines '
@@ -488,12 +471,12 @@ def _render_overview(d: dict) -> str:
             f"({_fmt_cny(ua['amount_cny'])} across {ua['n_lines']} lines) — "
             "shown as Unattributed everywhere.</p>"
         )
-    cards = "".join(
-        f'<div class="opt-card"><h4>{_esc(c["title"])}</h4>'
-        f'<div class="saving">saves ~{_fmt_cny(c["saving_cny"])}</div>'
-        f'<div class="proof">{_esc(c["proof"])}</div></div>'
-        for c in ov["summary"]["top3_optimizations"]
-    )
+    return note
+
+
+def _render_money_flow(d: dict) -> str:
+    """Sankey Spend → stages → suppliers with a no-JS table twin (Cost tab)."""
+    ov = d["overview"]
     fallback_suppliers = [
         [
             _esc(r["supplier"]),
@@ -522,14 +505,7 @@ def _render_overview(d: dict) -> str:
         )
     )
     return (
-        '<p class="lead">Where the money goes across production stages and '
-        "suppliers. All amounts in CNY (¥).</p>"
-        + exec_html
-        + note
-        + f'<div class="tiles">{tiles_html}</div>'
-        + _render_stage_menu(d)
-        + _render_ideal_timeline(d)
-        + "<h3>Money flow: spend → stages → suppliers</h3>"
+        "<h3>Money flow: spend → stages → suppliers</h3>"
         + '<p class="hint">Read left to right: each stage\'s spend splits into '
         "the suppliers paid for it — top 10 individually, the rest lumped "
         "into Others.</p>"
@@ -537,9 +513,14 @@ def _render_overview(d: dict) -> str:
         + "<details open><summary>Tables (no-JS fallback)</summary>"
         + fallback
         + "</details>"
-        "<h3>Top optimization opportunities</h3>"
-        f'<div class="cards">{cards}</div>'
     )
+
+
+def _render_overview(d: dict) -> str:
+    """Stage menu screen: the production stages and nothing else (EI-1
+    restructure — KPIs/exec summary live on Home, money flow on Cost,
+    ideal timeline on Timelines)."""
+    return _render_stage_menu(d)
 
 
 def _render_cost(d: dict) -> str:
@@ -570,6 +551,7 @@ def _render_cost(d: dict) -> str:
     return (
         "<p>Four views of the same numbers: totals, monthly trend, shares and "
         "a month×stage matrix.</p>"
+        + _render_money_flow(d)
         + "<h3>Total spend by stage</h3>"
         + '<p class="hint">One bar per production stage — taller means more '
         "spend over the whole period.</p>"
@@ -618,6 +600,7 @@ def _render_timelines(d: dict) -> str:
         )
     return (
         "<p>When each style moved through production, drawn from payment dates.</p>"
+        + _render_ideal_timeline(d)
         + "<h3>Production timeline per style</h3>"
         + '<p class="hint">Each row is a style; bars show when every stage '
         "was paid. Re-sort the rows by total spend or by duration below.</p>"
@@ -846,7 +829,7 @@ def _render_home(d: dict) -> str:
     )
     links = "".join(
         f'<a class="home-link" href="#/tab/{tid}">{title} →</a>'
-        for tid, title, _fn in TABS
+        for tid, title, _fn in TABS[1:]  # stage menu card already covers TABS[0]
     )
     return (
         "<h2>Where does the money go?</h2>"
@@ -854,6 +837,7 @@ def _render_home(d: dict) -> str:
         "clicks through to the screen that proves it.</p>"
         f'<div class="tiles kpis">{kpis}</div>'
         + (f'<ul class="exec">{bullets}</ul>' if bullets else "")
+        + _render_data_quality_notes(d)
         + '<h3>Start here</h3><div class="home-links">'
         '<a class="home-link" href="#/tab/overview">Stage menu — how a figure '
         "is made, stage by stage →</a>" + links + "</div>"

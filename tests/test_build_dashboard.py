@@ -497,3 +497,30 @@ def test_docs_ia_spec_exists_and_public_safe():
     assert "breadcrumb" in text.lower()
     # the repo is public: no real money figures in the spec
     assert "¥" not in text
+
+
+def test_ia_tabs_match_rendered_tabs():
+    """IA_TABS (payload routes) and TABS (rendered nav) must list the same
+    tab ids in the same order — drift would make the nav link to a route the
+    router silently drops to Home (PR 33 review)."""
+    from action_figures.dashboard_data import IA_TABS
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    assert IA_TABS == [tid for tid, _title, _fn in bd.TABS]
+
+
+def test_overview_screen_is_stage_menu_only(html):
+    """EI-1 restructure: '#/tab/overview' shows the stage menu and nothing
+    else — KPIs/exec summary live on Home, money flow on Cost, the ideal
+    timeline on Timelines."""
+    section = html.split('id="overview"', 1)[1].split("</section>", 1)[0]
+    assert 'id="stage-menu"' in section
+    for absent in ("chart-sankey", "chart-ideal", "tile kpi", "exec",
+                   "Top optimization opportunities"):
+        assert absent not in section, absent
+
+
+def test_home_links_skip_duplicate_overview(html):
+    home = html.split('id="home"', 1)[1].split("</section>", 1)[0]
+    # one link per destination: the stage-menu card covers #/tab/overview
+    assert home.count('href="#/tab/overview"') == 1
