@@ -7,6 +7,7 @@ result can be embedded verbatim into dist/index.html by build_dashboard.py.
 Expected CSV layout under ``reports_dir`` (headers are the contract):
 
 - audit/stage_summary.csv     stage,n_lines,amount_cny,share_pct
+- audit/stages.csv            stage_id,order,label_en,description_en,zh_keys
 - audit/by_month_stage.csv    month,stage,amount_cny
 - audit/by_style_stage.csv    style_no,stage,amount_cny
 - audit/by_style_timeline.csv style_no,stage,start_date,end_date
@@ -89,6 +90,30 @@ def load_stage_summary(path: Path) -> list[dict]:
         for r in _read_csv(path)
     ]
     return sorted(rows, key=lambda r: r["amount_cny"], reverse=True)
+
+
+SERVICE_STAGES = frozenset({"admin_other", "unclassified"})
+
+
+def load_stages_meta(path: Path) -> list[dict]:
+    """stages.csv -> stage metadata rows in production order (PE-1 export).
+
+    Columns: stage_id, order (1-12), label_en, description_en, zh_keys
+    (';'-joined). zh_keys becomes a list; ``service`` marks the two
+    non-production buckets that close the menu as an Other block.
+    """
+    rows = [
+        {
+            "stage_id": r["stage_id"].strip(),
+            "order": int(r["order"]),
+            "label_en": r["label_en"].strip(),
+            "description_en": r["description_en"].strip(),
+            "zh_keys": [k.strip() for k in r["zh_keys"].split(";") if k.strip()],
+            "service": r["stage_id"].strip() in SERVICE_STAGES,
+        }
+        for r in _read_csv(path)
+    ]
+    return sorted(rows, key=lambda r: r["order"])
 
 
 def load_by_month_stage(path: Path) -> list[dict]:
@@ -571,6 +596,21 @@ def build_dashboard_data(
         else {}
     )
     stages = load_stage_summary(reports_dir / "audit" / "stage_summary.csv")
+    # stage menu (Process Explorer): stages.csv metadata in process order,
+    # amounts merged from stage_summary — a stage missing from the summary
+    # (qc_testing in the real data) keeps its menu row at zero
+    summary_by_stage = {r["stage"]: r for r in stages}
+    stage_menu = []
+    for meta in load_stages_meta(reports_dir / "audit" / "stages.csv"):
+        s = summary_by_stage.get(meta["stage_id"])
+        stage_menu.append(
+            {
+                **meta,
+                "amount_cny": s["amount_cny"] if s else 0.0,
+                "share_pct": s["share_pct"] if s else 0.0,
+                "n_lines": s["n_lines"] if s else 0,
+            }
+        )
     by_month = load_by_month_stage(reports_dir / "audit" / "by_month_stage.csv")
     by_style = load_by_style_stage(reports_dir / "audit" / "by_style_stage.csv")
     timeline = load_by_style_timeline(reports_dir / "audit" / "by_style_timeline.csv")
@@ -737,4 +777,5 @@ def build_dashboard_data(
         "benchmarks": {"rows": bench_rows, "stages": bench_stages},
         "optimizations": opt,
         "glossary": {"rows": glossary},
+        "stages": stage_menu,
     }

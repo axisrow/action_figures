@@ -14,6 +14,7 @@ from action_figures.dashboard_data import (
     load_glossary,
     load_optimizations,
     load_stage_summary,
+    load_stages_meta,
     load_supplier_translations,
     load_suppliers,
 )
@@ -97,6 +98,18 @@ def reports_dir(tmp_path) -> Path:
         [
             "开模,Tooling / mold making,Metal mold creation for plastic parts",
             "喷油,Spray painting,Painting parts with spray guns",
+        ],
+    )
+    write(
+        d / "audit" / "stages.csv",
+        "stage_id,order,label_en,description_en,zh_keys",
+        [
+            "design_prototyping,1,Design & Prototyping,Artists draw and sculpt every part digitally,画图;打样;3D",
+            "tooling_molds,2,Tooling & Molds,Steel or resin molds are made before mass production,开模;模具;模费",
+            "painting_printing,5,Painting & Printing,Spray and hand painting plus printing and plating,喷油;上色;丝印",
+            "logistics_freight,10,Logistics & Freight,Courier and shipping fees for samples and materials,运费;快递",
+            "admin_other,11,Admin & Other,Office overhead not part of physically making the figures,出差;油费",
+            "unclassified,12,Unclassified,Lines the taxonomy could not classify,",
         ],
     )
     return d
@@ -579,3 +592,61 @@ def test_gantt_truncation_reports_total_style_count(tmp_path):
     assert tl["gantt_total_styles"] == 30
     assert tl["gantt"][0]["style_no"] == "AF-001"  # richest style first
     assert tl["unlinked"] == {"n_lines": 0, "amount_cny": 0.0}
+
+
+# --- PE-2: stages.csv metadata + payload `stages` section (stage menu) ----
+
+
+def test_load_stages_meta_sorted_by_production_order(reports_dir):
+    rows = load_stages_meta(reports_dir / "audit" / "stages.csv")
+    assert [r["stage_id"] for r in rows] == [
+        "design_prototyping",
+        "tooling_molds",
+        "painting_printing",
+        "logistics_freight",
+        "admin_other",
+        "unclassified",
+    ]
+    assert [r["order"] for r in rows] == [1, 2, 5, 10, 11, 12]
+    assert rows[0]["label_en"] == "Design & Prototyping"
+    assert rows[0]["description_en"].startswith("Artists draw")
+    assert rows[0]["zh_keys"] == ["画图", "打样", "3D"]
+    assert rows[-1]["zh_keys"] == []  # unclassified has no keywords
+
+
+def test_load_stages_meta_missing_file(tmp_path):
+    assert load_stages_meta(tmp_path / "nope" / "stages.csv") == []
+
+
+def test_payload_stages_merges_stage_summary_amounts(reports_dir):
+    """Menu sums must reconcile with stage_summary; a stage known to
+    stages.csv but absent from the summary (qc_testing in the real data)
+    sums to zero instead of disappearing."""
+    by_id = {s["stage_id"]: s for s in build_dashboard_data(reports_dir)["stages"]}
+    assert by_id["tooling_molds"]["amount_cny"] == 10000.0
+    assert by_id["tooling_molds"]["share_pct"] == 50.0
+    assert by_id["tooling_molds"]["n_lines"] == 4
+    assert by_id["logistics_freight"]["amount_cny"] == 4000.0
+    assert by_id["design_prototyping"]["amount_cny"] == 0.0
+    assert by_id["design_prototyping"]["share_pct"] == 0.0
+    assert by_id["design_prototyping"]["n_lines"] == 0
+
+
+def test_payload_stages_mark_service_buckets(reports_dir):
+    stages = build_dashboard_data(reports_dir)["stages"]
+    assert [(s["stage_id"], s["service"]) for s in stages] == [
+        ("design_prototyping", False),
+        ("tooling_molds", False),
+        ("painting_printing", False),
+        ("logistics_freight", False),
+        ("admin_other", True),
+        ("unclassified", True),
+    ]
+
+
+def test_payload_stages_absent_without_stages_csv(tmp_path):
+    d = tmp_path / "reports"
+    write(d / "audit" / "stage_summary.csv",
+          "stage,n_lines,amount_cny,share_pct",
+          ["tooling_molds,1,100.00,100.0"])
+    assert build_dashboard_data(d)["stages"] == []

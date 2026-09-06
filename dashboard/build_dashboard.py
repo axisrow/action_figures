@@ -46,6 +46,9 @@ logistics_freight,53,28000.00,4.4
 assembly_processing,29,15000.00,2.3
 qc_testing,11,9000.00,1.4
 design_prototyping,4,2000.00,0.2
+textile_accessories,18,5000.00,0.8
+admin_other,9,3000.00,0.5
+unclassified,7,1200.00,0.2
 """
 
 MOCK_BY_MONTH_STAGE = """month,stage,amount_cny
@@ -170,8 +173,26 @@ MOCK_GLOSSARY = """zh,en,explanation
 款号,Style number,The product code of one figure design (our internal SKU).
 """
 
+# Stage metadata for the Process Explorer menu (canonical taxonomy copy —
+# labels/descriptions are project text, not financial data), orders 1-12.
+MOCK_STAGES = """stage_id,order,label_en,description_en,zh_keys
+design_prototyping,1,Design & Prototyping,"Design and prototyping: artists draw and sculpt every part digitally, then sample parts are 3D printed and revised until approved. It is paid per model before any production can start, so it does not get cheaper with bigger orders.",画图;扫描;打样;做样;样办;打版;打印;3D;修精细;改神态;拆件;设计;雕刻
+tooling_molds,2,Tooling & Molds,"Tooling and molds: steel, aluminum or resin molds are made before any plastic part can be mass-produced. The project's largest one-off investment — many small cheap molds instead of a few expensive ones, typical for small-batch production.",开模;模具;模费;搪胶模;合金模;铜模;模芯;做模;冲模;线割;钢模;铝模
+raw_materials,3,Raw Materials,"Raw materials and consumables: plastic compound, paint, glue, thinner, screws, magnets and other workshop supplies consumed by production and assembly.",原料;材料;辅料;PVC;塑胶;颜料;胶水;开油水;酒精;焊锡;螺丝;磁铁;铜管;铜片;五金;海绵;软胶;红蜡;胶片;钻头;钻嘴;美纹纸;插销;弹簧;保险销;配件
+injection_molding,4,Injection Molding,"Molded parts production: factory runs that inject, cast or rotocast plastic parts — soles, buckles, weapons, helmets — from the molds. Paid per part, so it scales with the size of the production run.",啤货;注塑;模压;成型;搪胶;头雕货款;头仔货款;手臂;手枪;压铸
+painting_printing,5,Painting & Printing,"Painting and printing: spray-painted parts, hand-painted head sculpts, fabric printing, decals and plating. Very labor-intensive, which makes it a major per-unit cost for collectible figures.",喷油;喷漆;上色;丝印;移印;印刷;印花;电镀;涂装;水贴;植毛;植绒;染色
+textile_accessories,6,Textiles & Accessories,"Textiles and garment accessories: fabric, leather, thread, zippers, buttons and woven labels for the figures' outfits. Tailoring is the backbone of cost for clothed 1/6 scale figures.",布;线;织唛;织带;皮;拉链;扣;鸡眼;服装;么术贴;橡筋;丈巾;棉带;绳;枪带
+assembly_processing,7,Assembly & Handwork,"Assembly and handwork: cutting fabric, sewing garments, trimming threads, turning metal parts and gluing everything into the finished figure. Mostly manual labor paid per unit or per operation.",手工费;做手工;剪线;切割;车件;折弯;组装;装配;加工;冲压;焊接;焊扣;焊配;塞棉;烫片;绣花;过朴;木枪;木头;做头发
+packaging,8,Packaging,"Packaging: boxes, cartons, blister trays and manuals. Almost absent in this project — figures ship as collectibles without retail boxes.",包装;彩盒;纸箱;封箱;泡壳;吸塑;说明书;防潮珠;贴纸
+qc_testing,9,QC & Testing,"Quality control and testing: product inspections and laboratory safety tests. Billed per report or per inspection day, so it costs relatively more on small production runs.",检测;测试;验货
+logistics_freight,10,Logistics & Freight,"Logistics and freight: courier and shipping fees for samples, parts and materials moving between the studio and outsourcing partners. Many small shipments — each cheap, but very frequent.",运费;快递;物流;寄件;寄付;到付;邮费;邮寄;寄货
+admin_other,11,Admin & Other,"Admin and office overhead: business trips, fuel, tolls, office equipment and meals — everything not part of physically making the figures.",出差;油费;高速费;办公;空调;年饭;午餐;餐饮;红酒;路由器;维修;车间修
+unclassified,12,Unclassified,Lines the taxonomy could not classify with confidence; reviewed manually in unclassified.csv.,
+"""
+
 MOCK_FILES = {
     "audit/stage_summary.csv": MOCK_STAGE_SUMMARY,
+    "audit/stages.csv": MOCK_STAGES,
     "audit/by_month_stage.csv": MOCK_BY_MONTH_STAGE,
     "audit/by_style_stage.csv": MOCK_BY_STYLE_STAGE,
     "audit/by_style_timeline.csv": MOCK_BY_STYLE_TIMELINE,
@@ -292,6 +313,63 @@ def _chart(id_: str, height: int = 420) -> str:
     )
 
 
+def _stage_menu_item(s: dict) -> str:
+    return (
+        f'<li><a class="stage-link" href="#/stage/{_esc(s["stage_id"])}">'
+        f'<span class="stage-no">{s["order"]}</span>'
+        f'<span class="stage-name">{_esc(s["label_en"])}</span>'
+        f'<span class="stage-amount">{_fmt_cny(s["amount_cny"])} · '
+        f"{s['share_pct']:.1f}%</span></a>"
+        f'<p class="hint">{_esc(s["description_en"])}</p></li>'
+    )
+
+
+def _render_stage_menu(d: dict) -> str:
+    """Process Explorer menu: the production stages in process order, the two
+    service buckets collapsed into Other, plus a static no-JS table twin."""
+    menu_stages = d.get("stages") or []
+    if not menu_stages:
+        return ""
+    production = [s for s in menu_stages if not s["service"]]
+    service = [s for s in menu_stages if s["service"]]
+    other = ""
+    if service:
+        amount = sum(s["amount_cny"] for s in service)
+        share = sum(s["share_pct"] for s in service)
+        other = (
+            f'<details id="stage-other"><summary>Other — admin &amp; '
+            f"unclassified ({_fmt_cny(amount)}, {share:.1f}% of spend)</summary>"
+            '<ol class="stage-menu">'
+            + "".join(_stage_menu_item(s) for s in service)
+            + "</ol></details>"
+        )
+    table = _table(
+        ["#", "Stage", "What it is", "Total", "Share"],
+        [
+            [
+                str(s["order"]),
+                _esc(s["label_en"]),
+                _esc(s["description_en"]),
+                _fmt_cny(s["amount_cny"]),
+                f'{s["share_pct"]:.1f}%',
+            ]
+            for s in menu_stages
+        ],
+    )
+    return (
+        f"<h3>How an action figure is made — {len(production)} stages</h3>"
+        '<p class="hint">The real production order, from first sketch to '
+        "shipped carton. Click a stage to open its page.</p>"
+        '<ol class="stage-menu" id="stage-menu">'
+        + "".join(_stage_menu_item(s) for s in production)
+        + "</ol>"
+        + other
+        + "<details><summary>Stage menu (no-JS fallback)</summary>"
+        + table
+        + "</details>"
+    )
+
+
 # --- per-tab renderers ----------------------------------------------------
 
 
@@ -371,6 +449,7 @@ def _render_overview(d: dict) -> str:
         + exec_html
         + note
         + f'<div class="tiles">{tiles_html}</div>'
+        + _render_stage_menu(d)
         + "<h3>Money flow: spend → stages → suppliers</h3>"
         + '<p class="hint">Read left to right: each stage\'s spend splits into '
         "the suppliers paid for it — top 10 individually, the rest lumped "
@@ -708,6 +787,21 @@ details summary { cursor: pointer; font-weight: 600; margin: 8px 0; }
 .filters input, .filters select { padding: 8px 10px; border: 1px solid #b2bec3;
                                   border-radius: 6px; font-size: 14px; }
 .hidden { display: none !important; }
+.stage-menu { list-style: none; margin: 10px 0; padding: 0; }
+.stage-menu li { background: #fff; border-radius: 10px; margin: 8px 0;
+                 box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 10px 14px; }
+.stage-link { display: flex; align-items: center; gap: 10px; text-decoration: none;
+              color: #2d3436; font-weight: 600; }
+.stage-link:hover .stage-name { color: #0984e3; }
+.stage-no { background: #dfe6e9; border-radius: 50%; min-width: 26px; height: 26px;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 13px; flex: none; }
+.stage-name { flex: 1 1 auto; }
+.stage-amount { color: #636e72; font-weight: 400; font-size: 13.5px; }
+.stage-menu .hint { margin: 4px 0 0 36px; font-size: 13px; }
+a.back { display: inline-block; margin: 6px 0 10px; color: #0984e3;
+         text-decoration: none; }
+a.back:hover { text-decoration: underline; }
 footer { text-align: center; color: #b2bec3; font-size: 12px; padding: 20px; }
 """
 
@@ -744,6 +838,22 @@ def render_html(data: dict, generated_from: str) -> str:
 </header>
 <main>
 {tabs_html}
+<section id="stage-view" class="tab-panel" role="region" aria-label="Stage detail">
+  <p><a class="back" href="#/overview">← Back to overview</a></p>
+  <h2 id="stage-title"></h2>
+  <p id="stage-desc" class="lead"></p>
+  <div id="stage-stats" class="tiles"></div>
+  <div class="cards">
+    <div class="opt-card" id="stage-slot-monthly"><h4>Spend by month</h4>
+      <p class="hint">Placeholder — the stage-page update adds the chart.</p></div>
+    <div class="opt-card" id="stage-slot-daily"><h4>Spend by day</h4>
+      <p class="hint">Placeholder — the stage-page update adds the chart.</p></div>
+    <div class="opt-card" id="stage-slot-suppliers"><h4>Top suppliers</h4>
+      <p class="hint">Placeholder — the stage-page update adds the table.</p></div>
+    <div class="opt-card" id="stage-slot-styles"><h4>Top styles</h4>
+      <p class="hint">Placeholder — the stage-page update adds the table.</p></div>
+  </div>
+</section>
 </main>
 <footer>Generated by dashboard/build_dashboard.py · ECharts 5 (CDN) · HTML tables work without JS</footer>
 <script id="dash-data" type="application/json">{payload}</script>
@@ -934,16 +1044,60 @@ def render_html(data: dict, generated_from: str) -> str:
 
   // Tabs
   var nav = document.getElementById('tabs');
+  function showTab(id) {{
+    document.querySelectorAll('.tab-panel').forEach(function (p) {{
+      p.classList.toggle('active', p.id === id);
+    }});
+    nav.querySelectorAll('button').forEach(function (b) {{
+      b.classList.toggle('active', b.dataset.tab === id);
+    }});
+    charts.forEach(function (c) {{ c.resize(); }});
+  }}
   nav.addEventListener('click', function (e) {{
     var btn = e.target.closest('button[data-tab]');
     if (!btn) return;
-    nav.querySelectorAll('button').forEach(function (b) {{ b.classList.remove('active'); }});
-    btn.classList.add('active');
-    document.querySelectorAll('.tab-panel').forEach(function (p) {{
-      p.classList.toggle('active', p.id === btn.dataset.tab);
-    }});
-    charts.forEach(function (c) {{ c.resize(); }});
+    showTab(btn.dataset.tab);
+    if (location.hash.indexOf('#/stage/') === 0) {{
+      // leaving a stage page via the tab bar: normalize the URL without a
+      // history entry (file:// browsers may refuse replaceState — ignore)
+      try {{ history.replaceState(null, '', '#/overview'); }} catch (err) {{}}
+    }}
   }});
+
+  // Hash router (Process Explorer): '#/overview' <-> '#/stage/<stage_id>'.
+  // back/forward buttons work via the hashchange listener; a stage id the
+  // payload does not know simply leaves the tab UI untouched.
+  var stagesById = {{}};
+  (DATA.stages || []).forEach(function (s) {{ stagesById[s.stage_id] = s; }});
+
+  function fillStage(s) {{
+    document.getElementById('stage-title').textContent =
+      'Stage ' + s.order + ' — ' + s.label_en;
+    document.getElementById('stage-desc').textContent = s.description_en;
+    document.getElementById('stage-stats').innerHTML =
+      '<div class="tile"><div class="tile-num">¥' + Number(s.amount_cny).toLocaleString() +
+      '</div><div class="tile-label">Stage total</div></div>' +
+      '<div class="tile"><div class="tile-num">' + s.share_pct.toFixed(1) +
+      '%</div><div class="tile-label">Share of spend</div></div>' +
+      '<div class="tile"><div class="tile-num">' + s.n_lines +
+      '</div><div class="tile-label">Expense lines</div></div>';
+  }}
+
+  function route() {{
+    var m = location.hash.match(/^#\\/stage\\/([A-Za-z0-9_-]+)$/);
+    if (m && stagesById[m[1]]) {{
+      fillStage(stagesById[m[1]]);
+      document.querySelectorAll('.tab-panel').forEach(function (p) {{
+        p.classList.toggle('active', p.id === 'stage-view');
+      }});
+      nav.querySelectorAll('button').forEach(function (b) {{ b.classList.remove('active'); }});
+      window.scrollTo(0, 0);
+      return;
+    }}
+    if (location.hash === '#/overview') showTab('overview');
+  }}
+  window.addEventListener('hashchange', route);
+  route();
 
   // Supplier search / filters (client-side)
   var search = document.getElementById('sup-search');
