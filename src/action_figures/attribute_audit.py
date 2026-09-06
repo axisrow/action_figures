@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from action_figures.attribution import application_rows
+
 UNCLASSIFIED = "unclassified"
 
 PROPOSAL_COLUMNS = [
@@ -566,12 +568,53 @@ def _report_md(prop_df: pd.DataFrame, stats: dict, df: pd.DataFrame) -> str:
     return "\n".join(md) + "\n"
 
 
+def _application_md(previous: pd.DataFrame, staged: pd.DataFrame) -> str:
+    """GH#39 section: status of the previous run's proposals after the
+    attribution application layer (rules + overrides)."""
+    rows = application_rows(previous, staged)
+    if not rows:
+        return ""
+    medium_plus = [r for r in rows if r["confidence"] in ("medium", "high")]
+    applied = [r for r in medium_plus if r["status"] == "applied"]
+    skipped = [r for r in medium_plus if r["status"] != "applied"]
+    md = [
+        "## GH#39 proposal application status",
+        "",
+        f"- Medium+ proposals from the previous forensic run: "
+        f"**{len(medium_plus)}** — applied **{len(applied)}** "
+        f"({sum(1 for r in applied if r['mechanism'] == 'rule')} via generic "
+        f"keyword rules, {sum(1 for r in applied if r['mechanism'] == 'override')} "
+        f"via exact-name overrides, "
+        f"{sum(1 for r in applied if r['mechanism'] == 'taxonomy')} via taxonomy), "
+        f"skipped **{len(skipped)}** (each with a written reason below).",
+        "",
+        "| line_id | field | proposed | confidence | status | mechanism | reason |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        md.append(
+            f"| {r['line_id']} | {r['field']} | {r['proposed']} "
+            f"| {r['confidence']} | {r['status']} | {r['mechanism'] or '—'} "
+            f"| {r['reason'] or '—'} |"
+        )
+    md.append("")
+    return "\n".join(md)
+
+
 def write_reports(prop_df: pd.DataFrame, stats: dict, df: pd.DataFrame,
-                  out_dir: Path | str) -> None:
-    """Write attribution_proposals.csv + attribution_report.md."""
+                  out_dir: Path | str, previous: pd.DataFrame | None = None) -> None:
+    """Write attribution_proposals.csv + attribution_report.md.
+
+    ``previous`` — the prior forensic run's proposals (read before the CSV
+    is overwritten). When given, the report gains the GH#39 application
+    status section for every previous proposal.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     prop_df.to_csv(out_dir / "attribution_proposals.csv", index=False)
-    (out_dir / "attribution_report.md").write_text(
-        _report_md(prop_df, stats, df), encoding="utf-8"
-    )
+    md = _report_md(prop_df, stats, df)
+    if previous is not None and len(previous):
+        section = _application_md(previous, df)
+        if section:
+            md = md.rstrip("\n") + "\n\n" + section + "\n"
+    (out_dir / "attribution_report.md").write_text(md, encoding="utf-8")

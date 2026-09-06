@@ -33,14 +33,21 @@ def _load_paths() -> tuple[Path, Path]:
 DATA_ROOT, REPORTS_ROOT = _load_paths()
 DATA_FILE = DATA_ROOT / "pkl" / "zh" / "all_months_staged.pkl"
 REPORTS_DIR = REPORTS_ROOT / "audit"
+PROPOSALS_CSV = REPORTS_DIR / "attribution_proposals.csv"
 
 
 def main() -> None:
     df = pd.read_pickle(DATA_FILE)
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
 
+    # the previous forensic run's proposals — read before the CSV is
+    # overwritten, so the report can state each one's application status
+    previous = None
+    if PROPOSALS_CSV.exists():
+        previous = pd.read_csv(PROPOSALS_CSV, keep_default_na=False)
+
     proposals, stats = build_proposals(df)
-    write_reports(proposals, stats, df, REPORTS_DIR)
+    write_reports(proposals, stats, df, REPORTS_DIR, previous=previous)
 
     total = stats["empty_supplier_amount"]
     print(f"rows: {stats['total_rows']}, empty supplier: "

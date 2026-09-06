@@ -35,6 +35,7 @@ stages:
     - 模具
     - 模费          # 搪胶模费
     - 搪胶模        # rotocast molds (头仔搪胶模…)
+    - 塑胶模        # plastic-mold deposits (…塑胶模定金) — tooling, not raw 材料 (GH#39)
     - 合金模        # alloy molds (定金 included)
     - 铜模          # 定型铜模
     - 模芯          # mold core (鞋底模芯做模)

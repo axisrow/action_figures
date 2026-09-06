@@ -18,6 +18,10 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
+from action_figures.attribution import (  # noqa: E402
+    apply_attribution,
+    load_attribution_overrides,
+)
 from action_figures.audit_tables import (  # noqa: E402
     by_day_stage,
     by_supplier_month,
@@ -39,6 +43,7 @@ DATA_ROOT, REPORTS_ROOT = _load_paths()
 DATA_DIR = DATA_ROOT / "pkl" / "zh"
 REPORTS_DIR = REPORTS_ROOT / "audit"
 TAXONOMY = REPO_ROOT / "config" / "taxonomy.yaml"
+OVERRIDES_CSV = DATA_ROOT / "dict" / "attribution_overrides.csv"
 
 MONTH_PKL = ["2026-01.pkl", "2026-02.pkl", "2026-03.pkl",
              "2026-04.pkl", "2026-05.pkl", "2026-06.pkl"]
@@ -96,20 +101,26 @@ STAGE_EN = {
 
 def main() -> None:
     taxonomy = load_taxonomy(TAXONOMY)
+    overrides = load_attribution_overrides(OVERRIDES_CSV)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     frames = []
     for name in MONTH_PKL:
         df = pd.read_pickle(DATA_DIR / name)
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
-        staged = classify_df(df, taxonomy)
+        staged = apply_attribution(classify_df(df, taxonomy), overrides)
         staged.to_pickle(DATA_DIR / name.replace(".pkl", "_staged.pkl"))
         frames.append(staged)
         print(f"{name}: {len(staged)} rows staged")
     all_df = pd.read_pickle(DATA_DIR / "all_months.pkl")
     all_df["amount"] = pd.to_numeric(all_df["amount"], errors="coerce").fillna(0.0)
-    all_df = classify_df(all_df, taxonomy)
+    all_df = apply_attribution(classify_df(all_df, taxonomy), overrides)
     all_df.to_pickle(DATA_DIR / "all_months_staged.pkl")
+
+    attributed = all_df[all_df["supplier_source"] != "ledger"]
+    print(f"attribution: {len(attributed)} lines filled "
+          f"({int((all_df['supplier_source'] == 'keyword').sum())} keyword, "
+          f"{int((all_df['supplier_source'] == 'override').sum())} override)")
 
     total_amount = all_df["amount"].sum()
 
