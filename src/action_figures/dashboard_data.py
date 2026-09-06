@@ -161,7 +161,7 @@ def load_suppliers(path: Path) -> list[dict]:
 def load_supplier_translations(path: Path) -> dict[str, str]:
     """translation dict CSV (zh,en,column_hint,n_occurrences,status) -> {zh: en}.
 
-    Only rows with column_hint == "supplier" and a non-empty en count;
+    Only rows with column_hint == "supplier" and a non-empty en value;
     everything else falls back to the raw zh name at lookup time.
     """
     return {

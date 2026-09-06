@@ -24,7 +24,10 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from action_figures.dashboard_data import build_dashboard_data  # noqa: E402
+from action_figures.dashboard_data import (  # noqa: E402
+    build_dashboard_data,
+    load_supplier_translations,
+)
 
 MAIN_CHECKOUT_REPORTS = Path("/Users/axisrow/Projects/action_figures/reports")
 
@@ -918,9 +921,17 @@ def main(argv: list[str] | None = None) -> int:
         # supplier translation dict lives next to reports/ in the data home
         # (gitignored, see config/paths.yaml); optional — raw zh when absent
         dict_csv = args.reports.parent / "data" / "dict" / "translation.csv"
+        has_dict = dict_csv.exists()
+        if has_dict:
+            n_entries = len(load_supplier_translations(dict_csv))
+            print(f"supplier dictionary: {n_entries} entries ({dict_csv})")
+        else:
+            print(
+                f"supplier dictionary: missing ({dict_csv}) — raw zh supplier labels"
+            )
         data = build_dashboard_data(
             args.reports,
-            supplier_translations_path=dict_csv if dict_csv.exists() else None,
+            supplier_translations_path=dict_csv if has_dict else None,
         )
         src = f"reports/ ({args.reports})"
     else:

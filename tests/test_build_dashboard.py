@@ -78,3 +78,31 @@ def test_main_writes_dist_index(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     assert text.startswith("<!DOCTYPE html>")
     assert "MOCK synthetic data" in text
+
+
+def test_main_logs_dictionary_status(tmp_path, capsys):
+    """The dictionary path is layout-dependent — the build log must say
+    whether EN supplier labels are active (review note on PR 2)."""
+    reports = tmp_path / "reports"
+    (reports / "audit").mkdir(parents=True)
+    (reports / "audit" / "stage_summary.csv").write_text(
+        "stage,n_lines,amount_cny,share_pct\ns1,1,100.00,100.0\n", encoding="utf-8"
+    )
+    dict_csv = tmp_path / "data" / "dict" / "translation.csv"
+    dict_csv.parent.mkdir(parents=True)
+    dict_csv.write_text(
+        "zh,en,column_hint,n_occurrences,status\n"
+        "假供应商甲,Fake Supplier A,supplier,2,translated\n"
+        "假供应商乙,Fake Supplier B,supplier,1,translated\n"
+        "假动词,Fake Verb,item,9,translated\n",  # non-supplier hint: not counted
+        encoding="utf-8",
+    )
+    out = tmp_path / "dist" / "index.html"
+    assert bd.main(["--reports", str(reports), "--out", str(out)]) == 0
+    assert "supplier dictionary: 2 entries" in capsys.readouterr().out
+
+    # without the dictionary the fallback must be visible, not silent
+    dict_csv.unlink()
+    out2 = tmp_path / "dist2" / "index.html"
+    assert bd.main(["--reports", str(reports), "--out", str(out2)]) == 0
+    assert "supplier dictionary: missing" in capsys.readouterr().out
