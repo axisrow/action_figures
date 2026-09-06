@@ -282,7 +282,8 @@ def test_build_dashboard_data_real_formats(tmp_path):
     ua = data["suppliers"]["unattributed"]
     assert ua["n_lines"] == 13
     assert ua["amount_cny"] == 43630.0
-    assert ua["share_pct"] == round(43630.0 / 20000.0 * 100, 1)
+    # 43630 of a 20000 stage total = 218.2% raw — clamped, never >100%
+    assert ua["share_pct"] == 100.0
 
     # benchmarks came from md, not csv
     assert data["benchmarks"]["rows"] == []

@@ -633,10 +633,13 @@ def build_dashboard_data(
     unattributed = None
     if unattr_rows:
         ua = unattr_rows[0]
+        # percentage is unattributed amount (by_supplier_stage) over the
+        # stage_summary total — two files that can drift apart, so clamp:
+        # a >100% share must never reach the page
         unattributed = {
             "n_lines": ua["n_lines"],
             "amount_cny": ua["amount_cny"],
-            "share_pct": round(ua["amount_cny"] / total_spend * 100, 1)
+            "share_pct": min(round(ua["amount_cny"] / total_spend * 100, 1), 100.0)
             if total_spend
             else 0.0,
         }

@@ -417,6 +417,29 @@ def test_unattributed_absent_without_blank_rows(reports_dir):
     assert data["overview"]["unattributed"] is None
 
 
+def test_unattributed_share_pct_clamped_to_100(tmp_path):
+    """Source-file drift (supplier CSV total > stage_summary total) must not
+    render an impossible ">100% of spend" callout (review note on PR 12)."""
+    d = tmp_path / "reports"
+    write(
+        d / "audit" / "stage_summary.csv",
+        "stage,n_lines,amount_cny,share_pct",
+        ["tooling_molds,2,1000.00,100.0"],
+    )
+    write(
+        d / "audit" / "by_supplier_stage.csv",
+        "supplier,stage,month,amount_cny",
+        [
+            "SupA,tooling_molds,2026-01,600.00",
+            ",tooling_molds,2026-02,1300.00",
+        ],
+    )
+    data = build_dashboard_data(d)
+    ua = data["overview"]["unattributed"]
+    assert ua["amount_cny"] == 1300.0  # honest numerator, clamped percentage
+    assert ua["share_pct"] == 100.0
+
+
 @pytest.fixture()
 def unattr_sankey_dir(tmp_path) -> Path:
     """12 named suppliers + a blank-supplier bucket bigger than all of them."""
