@@ -372,6 +372,9 @@ def load_benchmarks_md(benchmarks_dir: Path) -> list[dict]:
                 seen.add(url)
                 sources.append({"title": title_text.strip(), "url": url})
 
+        dm = _ACCESSED_RE.search(text) or re.search(
+            r"re-verified\s+(\d{4}-\d{2}-\d{2})", text
+        )
         cards.append(
             {
                 "stage": path.stem,
@@ -379,6 +382,7 @@ def load_benchmarks_md(benchmarks_dir: Path) -> list[dict]:
                 "intro": intro,
                 "highlights": highlights,
                 "sources": sources,
+                "accessed_on": dm.group(1) if dm else "",
             }
         )
     return cards
@@ -402,11 +406,37 @@ def _md_table_rows(text: str, header_keyword: str) -> list[list[str]]:
     return []
 
 
+_ACCESSED_RE = re.compile(r"(?:acc\.|accessed)\s+(\d{4}-\d{2}-\d{2})")
+
+
+def _section_evidence(section: str) -> list[dict]:
+    """Deduped links of a recommendation section with their access dates.
+
+    A date ('acc. YYYY-MM-DD' / 'accessed YYYY-MM-DD') found on a line
+    applies to that line's links (how the report writes them).
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for line in section.splitlines():
+        dm = _ACCESSED_RE.search(line)
+        accessed = dm.group(1) if dm else ""
+        for title, url in _LINK_RE.findall(line):
+            if url not in seen:
+                seen.add(url)
+                out.append(
+                    {"title": title.strip(), "url": url,
+                     "accessed_on": accessed}
+                )
+    return out
+
+
 def load_optimizations_md(path: Path) -> dict:
     """optimization/optimization.md -> {cards, market_comparison, insights}.
 
     - cards: ranked table ('Recommendation' header) + the matching '### N)'
-      sections' Our baseline / Market range / Savings math paragraphs
+      sections' What to do / Our baseline / Market range / Savings math /
+      Time / Effort / Risks paragraphs and evidence links (with access
+      dates) for the detail sub-screens (GH#29)
     - market_comparison: the stage-share table ('Our share' header)
     - insights: numbered bold deviation items + the '**Reading:**' verdict
     """
@@ -432,23 +462,43 @@ def load_optimizations_md(path: Path) -> dict:
                 "baseline": "",
                 "market_range": "",
                 "math": "",
+                "what_to_do": "",
+                "time_note": "",
+                "effort_detail": "",
+                "risks": "",
+                "evidence": [],
             }
         )
 
     # per-recommendation sections: '### N) Title ... **Label:** text'
     sections = re.split(r"^###\s+\d+\)\s+", text, flags=re.M)[1:]
+    # value runs to the next label-shaped '**…:**' on the same line (rec 7
+    # writes 'Effort:' and 'Risks:' on one line) or to the line end — bold
+    # values like **¥59,180** inside the text do not end it
+    _labels = (
+        "Our baseline|Market range|Savings math|What to do[^:*]*|"
+        "Time|Effort|Risks"
+    )
     label_re = re.compile(
-        r"\*\*(?:Our baseline|Market range|Savings math):\*\*\s*(.+)"
+        rf"\*\*({_labels}):\*\*\s*(.+?)(?=\s*\*\*(?:{_labels}):|\s*$)",
+        re.M,
     )
     field_of = {"Our baseline": "baseline", "Market range": "market_range",
-                "Savings math": "math"}
+                "Savings math": "math", "What to do": "what_to_do",
+                "Time": "time_note", "Effort": "effort_detail",
+                "Risks": "risks"}
     for section in sections:
+        # a section ends at the next '## ' heading — the tail of the file
+        # (RFQ list, assumptions) must not leak into the last rec's fields
+        # or evidence (review on PR 35)
+        section = re.split(r"^##\s", section, flags=re.M)[0]
         first_line = section.splitlines()[0]
-        fields = {}
+        fields = {"evidence": _section_evidence(section)}
         for m in label_re.finditer(section):
             for label, field in field_of.items():
-                if m.group(0).startswith(f"**{label}:**"):
-                    fields[field] = _strip_md(m.group(1))
+                # prefix match: 'What to do (plain words)' carries a suffix
+                if m.group(0).startswith(f"**{label}"):
+                    fields[field] = _strip_md(m.group(2))
         for card in cards:
             if card["title"].lower() in first_line.lower():
                 card.update(fields)
@@ -595,6 +645,46 @@ def build_ideal_timeline(stages_meta: list[dict]) -> dict:
     }
 
 
+# --- detail sub-screen pages (EI-4, GH#29) ---------------------------------
+
+
+def build_optimization_pages(cards: list[dict] | dict) -> dict:
+    """Optimization cards keyed by recommendation id ('1'…'7').
+
+    Accepts the cards list (md or CSV path) or an already-keyed dict; the
+    values are the full cards, so a detail page has everything the list
+    card shows plus what-to-do / math / risks / evidence."""
+    if isinstance(cards, dict):
+        return cards
+    return {c["id"]: c for c in cards}
+
+
+def build_benchmark_pages(
+    bench_stages: list[dict], market_comparison: list[dict]
+) -> dict:
+    """Benchmark stage cards keyed by stage_id, joined with our numbers.
+
+    ``our`` = {share_pct, h1_2026_cny, market_ref} from the optimization
+    report's stage-share table when the stage appears there, else None."""
+    comp = {r["stage"]: r for r in (market_comparison or [])}
+    pages = {}
+    for s in bench_stages:
+        r = comp.get(s["stage"])
+        pages[s["stage"]] = {
+            **s,
+            "our": (
+                {
+                    "share_pct": r["our_share_pct"],
+                    "h1_2026_cny": r["h1_2026_cny"],
+                    "market_ref": r.get("market_ref", ""),
+                }
+                if r
+                else None
+            ),
+        }
+    return pages
+
+
 # --- Executive Home (EI-2) ------------------------------------------------
 
 
@@ -637,8 +727,10 @@ def _benchmarks_stages_from_rows(rows: list[dict]) -> list[dict]:
         card = by_stage.setdefault(
             r["stage"],
             {"stage": r["stage"], "title": r["stage"], "intro": "",
-             "highlights": [], "sources": []},
+             "highlights": [], "sources": [], "accessed_on": ""},
         )
+        if not card["accessed_on"]:
+            card["accessed_on"] = r["accessed_on"]
         card["highlights"].append(
             f"{r['metric']}: ours {r['our_value']:,.1f} vs market "
             f"{r['market_low']:,.1f}–{r['market_high']:,.1f} {r['unit']}"
@@ -1213,6 +1305,10 @@ def build_dashboard_data(
         "stages": stage_menu,
         "stage_pages": stage_pages,
         "supplier_pages": supplier_pages,
+        "optimization_pages": build_optimization_pages(opt["cards"]),
+        "benchmark_pages": build_benchmark_pages(
+            bench_stages, opt.get("market_comparison") or []
+        ),
         "ideal_timeline": build_ideal_timeline(stage_menu),
         "ia": build_ia(tab_titles or {}),
     }

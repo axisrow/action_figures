@@ -744,11 +744,14 @@ def _render_benchmarks(d: dict) -> str:
             f'rel="noopener">{_esc(src["title"])}</a>'
             for src in s["sources"]
         )
+        acc = (f' (accessed {s["accessed_on"]})'
+               if s.get("accessed_on") else "")
         cards.append(
-            f'<div class="bench-card"><h4>{_esc(s["title"])}</h4>'
+            f'<div class="bench-card"><h4><a href="#/bench/{_esc(s["stage"])}">'
+            f'{_esc(s["title"])}</a></h4>'
             f'<p class="lead">{_esc(s["intro"])}</p>'
             + (f"<ul>{highs}</ul>" if highs else "")
-            + (f'<div class="srcs">{srcs}</div>' if srcs else "")
+            + (f'<div class="srcs">{srcs}{acc}</div>' if srcs else "")
             + "</div>"
         )
     if cards:
@@ -760,17 +763,46 @@ def _render_benchmarks(d: dict) -> str:
         parts.append(_table(
             ["Stage", "Our share", "H1-2026 spend", "Market reference"],
             [
-                [_label(r["stage"]), f'{r["our_share_pct"]:.1f}%',
+                [f'<a href="#/bench/{_esc(r["stage"])}">{_label(r["stage"])}</a>',
+                 f'{r["our_share_pct"]:.1f}%',
                  _fmt_cny(r["h1_2026_cny"]), _esc(r["market_ref"])]
                 for r in comp
             ],
         ))
+    # no-JS fallback: every stage's full ranges + sources with access dates
+    fb_rows = []
+    for s in bm["stages"]:
+        srcs = " · ".join(
+            f'<a href="{_esc(src["url"])}" target="_blank" '
+            f'rel="noopener">{_esc(src["title"])}</a>'
+            for src in s["sources"]
+        )
+        acc = s.get("accessed_on") or ""
+        our = next((r for r in comp if r["stage"] == s["stage"]), None)
+        fb_rows.append([
+            f'<a href="#/bench/{_esc(s["stage"])}">{_esc(s["title"])}</a>',
+            (f'{our["our_share_pct"]:.1f}% / {_fmt_cny(our["h1_2026_cny"])}'
+             if our else ""),
+            "<br>".join(_esc(h) for h in s["highlights"]),
+            srcs + (f" (accessed {acc})" if acc else ""),
+        ])
+    if fb_rows:
+        parts.append(
+            "<details><summary>Benchmarks (no-JS fallback)</summary>"
+            + _table(
+                ["Stage", "Ours (share / H1-2026)", "Market ranges",
+                 "Sources"],
+                fb_rows,
+            )
+            + "</details>"
+        )
     return "".join(parts)
 
 
 def _render_optimizations(d: dict) -> str:
     cards = "".join(
-        f'<div class="opt-card"><h4>#{_esc(c["id"])} {_esc(c["title"])}</h4>'
+        f'<div class="opt-card"><h4><a href="#/optimization/{_esc(c["id"])}">'
+        f'#{_esc(c["id"])} {_esc(c["title"])}</a></h4>'
         + (f'<div class="base">baseline {_fmt_cny(c["baseline_cny"])} '
            f'({_label(c["stage"])})</div>'
            if c.get("baseline_cny") else "")
@@ -780,19 +812,22 @@ def _render_optimizations(d: dict) -> str:
         + (f' / 6 months (probability {c["prob"]:.0%}, effort {c["effort"]}, '
            f'saves {c["time_saved"]})' if c.get("prob") is not None else "")
         + "</div>"
-        + (f'<div class="proof">{_esc(c["market_range"])}</div>'
-           if c.get("market_range") else "")
+        + (f'<div class="proof">{_esc(c["what_to_do"])}</div>'
+           if c.get("what_to_do") else "")
         + (f'<div class="proof">{_esc(c["math"])}</div>' if c.get("math") else "")
         + (f'<div class="proof">{_esc(c["proof"])}</div>' if c.get("proof") else "")
         + "</div>"
         for c in d["optimizations"]["cards"]
     )
     rows = [
-        [c["id"], _esc(c["title"]),
+        [f'<a href="#/optimization/{_esc(c["id"])}">#{c["id"]}</a>',
+         _esc(c["title"]),
          _label(c["stage"]) if c.get("stage") else "",
          _fmt_cny(c["baseline_cny"]) if c.get("baseline_cny") else "",
          _fmt_cny(c["saving_cny"]),
-         c.get("prob", ""), c.get("effort", ""), c.get("time_saved", "")]
+         c.get("prob", ""), c.get("effort", ""), c.get("time_saved", ""),
+         _esc(c.get("what_to_do", "")), _esc(c.get("math", "")),
+         _esc(c.get("risks", ""))]
         for c in d["optimizations"]["cards"]
     ]
     insights = d["optimizations"].get("insights") or []
@@ -803,12 +838,15 @@ def _render_optimizations(d: dict) -> str:
                     + "</ul>")
     return (
         "<p>Concrete saving opportunities, ranked by score "
-        "(saving × probability ÷ effort). Each card shows the baseline cost, "
-        "the saving estimate and the supporting evidence.</p>"
+        "(saving × probability ÷ effort). Click a card for the full detail "
+        "page: baseline, savings math, evidence links and risks.</p>"
         f'<div class="cards">{cards}</div>'
         + ins_html
+        + "<details open><summary>Optimizations (no-JS fallback)</summary>"
         + _table(["#", "Recommendation", "Stage", "Baseline", "Saving (6-mo)",
-                  "Prob.", "Effort", "Time saved"], rows)
+                  "Prob.", "Effort", "Time saved", "What to do",
+                  "Savings math", "Risks"], rows)
+        + "</details>"
     )
 
 
@@ -1037,6 +1075,14 @@ def render_html(data: dict, generated_from: str) -> str:
     <div class="opt-card" id="supplier-slot-styles"><h4>Styles served</h4>
       <div id="supplier-tbl-styles"></div></div>
   </div>
+</section>
+<section id="opt-view" class="tab-panel" role="region" aria-label="Optimization detail">
+  <p><a class="back" href="#/tab/optimizations">← Back to optimizations</a></p>
+  <div id="opt-detail"></div>
+</section>
+<section id="bench-view" class="tab-panel" role="region" aria-label="Benchmark detail">
+  <p><a class="back" href="#/tab/benchmarks">← Back to benchmarks</a></p>
+  <div id="bench-detail"></div>
 </section>
 </main>
 <footer>Generated by dashboard/build_dashboard.py · ECharts 5 (CDN) · HTML tables work without JS</footer>
@@ -1530,9 +1576,96 @@ def render_html(data: dict, generated_from: str) -> str:
     }});
   }}
 
+  // --- EI-4 detail sub-screens (GH#29) ----------------------------------
+  function escT(s) {{
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    // innerHTML leaves quotes raw — escape them too: escT output also lands
+    // in double-quoted href attributes (same contract as _esc server-side)
+    return d.innerHTML.replace(/"/g, '&quot;');
+  }}
+  function kv(label, value) {{
+    return value ? '<div class="base"><strong>' + label + ':</strong> ' +
+      escT(value) + '</div>' : '';
+  }}
+  function linkList(items) {{
+    return items.length ? '<ul>' + items.map(function (s) {{
+      return '<li><a href="' + escT(s.url) + '" target="_blank" rel="noopener">' +
+        escT(s.title) + '</a>' +
+        (s.accessed_on ? ' (accessed ' + escT(s.accessed_on) + ')' : '') +
+        '</li>';
+    }}).join('') + '</ul>' : '';
+  }}
+  function fillOpt(p) {{
+    document.getElementById('opt-detail').innerHTML =
+      '<h2>Optimization #' + escT(p.id) + ' — ' + escT(p.title) + '</h2>' +
+      '<div class="opt-card">' +
+      '<div class="saving">estimated saving ¥' +
+      Number(p.saving_cny).toLocaleString() + ' / 6 months</div>' +
+      (p.prob != null ? '<div class="base">probability ' +
+        Math.round(p.prob * 100) + '% · effort ' + escT(p.effort) +
+        (p.time_saved ? ' · saves ' + escT(p.time_saved) : '') +
+        '</div>' : '') +
+      kv('What to do', p.what_to_do) +
+      kv('Our baseline', p.baseline) +
+      kv('Market range', p.market_range) +
+      kv('Savings math', p.math) +
+      kv('Time', p.time_note) +
+      kv('Effort', p.effort_detail) +
+      kv('Risks', p.risks) +
+      (p.evidence && p.evidence.length
+        ? '<h3>Evidence</h3>' + linkList(p.evidence) : '') +
+      '</div>';
+  }}
+  function fillBench(p) {{
+    document.getElementById('bench-detail').innerHTML =
+      '<h2>Benchmark — ' + escT(p.title) + '</h2>' +
+      (p.intro ? '<p class="lead">' + escT(p.intro) + '</p>' : '') +
+      (p.our
+        ? '<div class="opt-card"><div class="base"><strong>Ours:</strong> ' +
+          p.our.share_pct.toFixed(1) + '% of spend, ¥' +
+          Number(p.our.h1_2026_cny).toLocaleString() +
+          ' in H1-2026. ' + escT(p.our.market_ref) + '</div></div>' : '') +
+      (p.highlights && p.highlights.length
+        ? '<h3>Market ranges</h3><ul>' +
+          p.highlights.map(function (h) {{
+            return '<li>' + escT(h) + '</li>';
+          }}).join('') + '</ul>' : '') +
+      (p.sources && p.sources.length
+        ? '<h3>Sources' +
+          (p.accessed_on ? ' (accessed ' + escT(p.accessed_on) + ')' : '') +
+          '</h3>' + linkList(p.sources) : '');
+  }}
+
   function route() {{
     if (REDIRECTS[location.hash]) {{
       try {{ location.replace(REDIRECTS[location.hash]); }} catch (err) {{}}
+      return;
+    }}
+    var mo = location.hash.match(/^#\\/optimization\\/([A-Za-z0-9_-]+)$/);
+    if (mo && (DATA.optimization_pages || {{}})[mo[1]]) {{
+      var op = DATA.optimization_pages[mo[1]];
+      document.querySelectorAll('.tab-panel').forEach(function (p) {{
+        p.classList.toggle('active', p.id === 'opt-view');
+      }});
+      crumbsRender(crumbItems(['Home', 'Optimizations', '#' + op.id]),
+        '#/tab/optimizations');
+      setNav('');
+      fillOpt(op);
+      window.scrollTo(0, 0);
+      return;
+    }}
+    var mb = location.hash.match(/^#\\/bench\\/([A-Za-z0-9_-]+)$/);
+    if (mb && (DATA.benchmark_pages || {{}})[mb[1]]) {{
+      var bp = DATA.benchmark_pages[mb[1]];
+      document.querySelectorAll('.tab-panel').forEach(function (p) {{
+        p.classList.toggle('active', p.id === 'bench-view');
+      }});
+      crumbsRender(crumbItems(['Home', 'Benchmarks', bp.title]),
+        '#/tab/benchmarks');
+      setNav('');
+      fillBench(bp);
+      window.scrollTo(0, 0);
       return;
     }}
     var ms = location.hash.match(/^#\\/supplier\\/(.+)$/);

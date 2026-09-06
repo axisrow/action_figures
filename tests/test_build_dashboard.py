@@ -38,6 +38,8 @@ def test_mock_data_matches_real_schema(mock_data):
         "supplier_pages",
         "ideal_timeline",
         "ia",
+        "optimization_pages",
+        "benchmark_pages",
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
