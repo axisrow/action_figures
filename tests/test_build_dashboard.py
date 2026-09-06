@@ -32,6 +32,7 @@ def test_mock_data_matches_real_schema(mock_data):
         "benchmarks",
         "optimizations",
         "glossary",
+        "stages",
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
@@ -202,3 +203,91 @@ def test_html_unattributed_callout_and_explainer(patched_html):
         "— lump-sum internal payments" in patched_html
     )
     assert "Unattributed" in patched_html
+
+
+# --- PE-2: stage menu + hash routing skeleton (Process Explorer) ----------
+
+PRODUCTION_STAGES = [
+    "design_prototyping",
+    "tooling_molds",
+    "raw_materials",
+    "injection_molding",
+    "painting_printing",
+    "textile_accessories",
+    "assembly_processing",
+    "packaging",
+    "qc_testing",
+    "logistics_freight",
+]
+
+
+def test_payload_stages_lists_all_12_in_process_order(mock_data):
+    stages = mock_data["stages"]
+    assert [s["stage_id"] for s in stages] == PRODUCTION_STAGES + [
+        "admin_other",
+        "unclassified",
+    ]
+    assert [s["order"] for s in stages] == list(range(1, 13))
+    assert sum(s["service"] for s in stages) == 2
+    # every menu entry carries its metadata + money numbers
+    assert all(
+        {"stage_id", "order", "label_en", "description_en",
+         "amount_cny", "share_pct"} <= set(s)
+        for s in stages
+    )
+
+
+def test_stage_menu_lists_ten_production_stages_in_order(html):
+    assert "<h3>How an action figure is made — 10 stages</h3>" in html
+    menu = html.split('id="stage-menu"', 1)[1].split('id="stage-other"', 1)[0]
+    import re
+
+    assert re.findall(r'href="#/stage/([\w-]+)"', menu) == PRODUCTION_STAGES
+
+
+def test_stage_menu_amounts_match_stage_summary(html):
+    # the mock stage_summary row: tooling_molds 182000.00 / 28.4
+    item = html.split('href="#/stage/tooling_molds"', 1)[1]
+    assert "¥182,000 · 28.4%" in item
+
+
+def test_service_stages_collapsed_into_other(html):
+    assert '<details id="stage-other">' in html  # no `open` attribute — collapsed
+    other = html.split('id="stage-other"', 1)[1].split("</details>", 1)[0]
+    import re
+
+    assert re.findall(r'href="#/stage/([\w-]+)"', other) == [
+        "admin_other",
+        "unclassified",
+    ]
+
+
+def test_stage_menu_nojs_fallback_table(html):
+    table = html.split("Stage menu (no-JS fallback)", 1)[1].split("</table>", 1)[0]
+    assert table.count("<tr>") == 13  # header row + all 12 stages
+    assert "Design &amp; Prototyping" in table
+    assert "Unclassified" in table
+
+
+def test_hash_router_and_stage_page_skeleton(html):
+    assert "addEventListener('hashchange'" in html  # back/forward support
+    view = html.split('id="stage-view"', 1)[1].split("</section>", 1)[0]
+    assert "← Back to overview" in view
+    assert 'id="stage-title"' in view
+    assert 'id="stage-desc"' in view
+    # content slots PE-3 fills in the next sub-issue
+    for slot in ("monthly", "daily", "suppliers", "styles"):
+        assert f'id="stage-slot-{slot}"' in view
+
+
+def test_hash_router_defaults_to_overview(html):
+    """Back from a stage page to the entry URL with the empty hash fires
+    hashchange with a hash matching neither route — the router must land on
+    the overview tab, not leave a dead stage view with no tab highlighted
+    (review on PR 19)."""
+    router = html.split("function route()", 1)[1].split(
+        "window.addEventListener('hashchange'", 1
+    )[0]
+    # unguarded fallback: any non-stage hash (empty, '#/overview', stray)
+    assert "showTab('overview');" in router
+    assert "location.hash === '#/overview'" not in router
