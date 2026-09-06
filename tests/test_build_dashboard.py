@@ -25,6 +25,7 @@ def html(mock_data) -> str:
 def test_mock_data_matches_real_schema(mock_data):
     # same top-level sections the real reports produce
     assert set(mock_data) == {
+        "home",
         "overview",
         "cost_structure",
         "timelines",
@@ -603,3 +604,34 @@ def test_ia_tabs_match_rendered_tabs():
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     assert IA_TABS == [tid for tid, _title, _fn in bd.TABS]
+
+
+# --- EI-2: Executive Home payload (owner design pass) ----------------------
+# Home renders as the stage menu only (EI-1 shell); the payload keeps the
+# lead / stage_cards / deepdive_links fold for EI-2 consumers.
+
+
+def test_home_payload_shape(mock_data):
+    home = mock_data["home"]
+    assert set(home) == {"lead", "stage_cards", "deepdive_links"}
+    assert home["stage_cards"] == mock_data["stages"]
+
+
+def test_home_renders_from_payload_stage_cards(mock_data):
+    """The Home screen renders from home.stage_cards (single source), not
+    from the top-level stages section — emptying the payload list empties
+    the menu even though d['stages'] still holds every row (PR 36 review)."""
+    data = copy.deepcopy(mock_data)
+    data["home"]["stage_cards"] = []
+    html2 = bd.render_html(data, "MOCK synthetic data (test)")
+    assert 'id="stage-menu"' not in html2
+
+
+def test_home_payload_deepdive_links_match_shell_nav(mock_data):
+    """deepdive_links mirror the shell nav: six deep-dive tabs under
+    '#/tab/<id>', no overview (Home IS the stage menu)."""
+    links = mock_data["home"]["deepdive_links"]
+    assert [(ln["id"], ln["href"]) for ln in links] == [
+        (tid, f"#/tab/{tid}") for tid in DEEP_DIVE_TABS
+    ]
+    assert links[0]["label"] == "Cost structure"  # titles from TABS

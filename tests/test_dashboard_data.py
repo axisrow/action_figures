@@ -1123,3 +1123,44 @@ def test_supplier_pages_json_matches_source_csvs(supplier_pages_dir):
     months = build_dashboard_data(supplier_pages_dir)["supplier_pages"]["SupB"]["months"]
     assert sum(m["amount_cny"] for m in months) == 6500.0  # by_supplier_month.csv
     assert json.loads(json.dumps(pages)) == pages  # JSON-safe
+
+
+# --- EI-2: Executive Home payload (owner design pass) --------------------
+# Home = exactly the stage-card menu + deep-dive links; the KPI row and
+# takeaway cards were dropped by the owner — data-quality callouts live on
+# Cost structure.
+
+
+def home_payload(d: Path) -> dict:
+    return build_dashboard_data(d)["home"]
+
+
+def test_home_payload_shape(reports_dir):
+    home = home_payload(reports_dir)
+    assert set(home) == {"lead", "stage_cards", "deepdive_links"}
+    assert home["lead"]  # one-line subtitle
+
+
+def test_home_stage_cards_mirror_stage_menu(reports_dir):
+    data = build_dashboard_data(reports_dir)
+    assert data["home"]["stage_cards"] == data["stages"]
+
+
+def test_home_deepdive_links_match_shell_routes(reports_dir):
+    """deepdive_links mirror the EI-1 shell nav: six deep-dive tabs under
+    '#/tab/<id>' (no overview — Home IS the stage menu)."""
+    data = build_dashboard_data(reports_dir)
+    links = data["home"]["deepdive_links"]
+    assert [(ln["id"], ln["href"]) for ln in links] == [
+        ("cost", "#/tab/cost"),
+        ("timelines", "#/tab/timelines"),
+        ("suppliers", "#/tab/suppliers"),
+        ("benchmarks", "#/tab/benchmarks"),
+        ("optimizations", "#/tab/optimizations"),
+        ("glossary", "#/tab/glossary"),
+    ]
+    # labels come from the shell tab titles when provided
+    titled = build_dashboard_data(
+        reports_dir, tab_titles={"cost": "Cost structure"}
+    )
+    assert titled["home"]["deepdive_links"][0]["label"] == "Cost structure"
