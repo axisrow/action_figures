@@ -18,8 +18,9 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
-from action_figures.audit_tables import by_supplier_stage  # noqa: E402
+from action_figures.audit_tables import by_day_stage, by_supplier_stage  # noqa: E402
 from action_figures.classify import classify_df, load_taxonomy  # noqa: E402
+from action_figures.stages_meta import stages_metadata  # noqa: E402
 
 
 def _load_paths() -> tuple[Path, Path]:
@@ -142,6 +143,15 @@ def main() -> None:
     print(f"supplier sum:  {supplier_sum:.2f}  "
           f"(diff {supplier_sum - total_amount:+.4f})")
 
+    # by_day_stage.csv (Process Explorer timeline)
+    by_day = by_day_stage(all_df)
+    by_day.to_csv(REPORTS_DIR / "by_day_stage.csv", index=False)
+    day_sum = by_day["amount_cny"].sum()
+    print(f"by-day sum:    {day_sum:.2f}  (diff {day_sum - total_amount:+.4f})")
+
+    # stages.csv (stage metadata for the Process Explorer menu/pages)
+    stages_metadata(taxonomy).to_csv(REPORTS_DIR / "stages.csv", index=False)
+
     # by_style_timeline.csv (Gantt input)
     timeline = (
         all_df[all_df["date"].notna()]
@@ -249,6 +259,9 @@ def write_audit_md(all_df: pd.DataFrame, summary: pd.DataFrame,
         "- `by_supplier_stage.csv` — supplier × stage "
         "(n_lines, amount, months_active)",
         "- `by_style_timeline.csv` — style × stage with min/max dates (Gantt input)",
+        "- `by_day_stage.csv` — date × stage (n_lines, amount) — Process Explorer timeline",
+        "- `stages.csv` — stage metadata: production order, English labels and "
+        "descriptions, zh keywords",
         "- `unclassified.csv` — lines left unclassified, for manual review",
         "- `data/pkl/zh/*_staged.pkl` — original frames + stage/stage_confidence "
         "(originals untouched)",

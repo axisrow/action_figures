@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from pathlib import Path
 
 import pandas as pd
+from conftest import git, init_repo
 
 from action_figures.verify_lib import (
     check_audit_totals,
@@ -356,34 +355,6 @@ class TestDashboardPayload:
 
 
 # --------------------------------------------------------------------- git ---
-
-
-def git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_CONFIG_SYSTEM": "/dev/null",
-            "HOME": str(repo),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-        },
-    ).stdout
-
-
-def init_repo(tmp_path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    git(repo, "init", "-q")
-    git(repo, "config", "user.email", "t@example.com")
-    git(repo, "config", "user.name", "T")
-    (repo / ".gitignore").write_text("data/\nreports/\nissues/\n*.xls\n*.xlsx\n*.pkl\n")
-    (repo / "README.md").write_text("synthetic repo\n")
-    git(repo, "add", ".gitignore", "README.md")
-    git(repo, "commit", "-q", "-m", "init")
-    return repo
 
 
 class TestGitHygiene:
