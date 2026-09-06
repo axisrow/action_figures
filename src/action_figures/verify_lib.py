@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from action_figures.dashboard_data import NOT_BOOKED_STAGES
+
 OK = "ok"
 FAIL = "fail"
 PENDING = "pending"
@@ -415,6 +417,226 @@ def check_dashboard_payload(dist_html: Path, reports_root: Path, tol: float = TO
     )
 
 
+def _load_dash_payload(dist_html: Path) -> tuple[dict | None, str]:
+    """Embedded dash-data JSON from dist/index.html -> (payload, error)."""
+    dist_html = Path(dist_html)
+    if not dist_html.exists():
+        return None, f"{dist_html} not built yet — regenerate dist and re-run verify"
+    match = DASH_JSON_RE.search(dist_html.read_text(encoding="utf-8"))
+    if not match:
+        return None, "dash-data script tag not found in dist/index.html"
+    return json.loads(match.group(1).replace("\\u003c", "<")), ""
+
+
+def _norm_style(value: object) -> str:
+    """'9052.0' -> '9052' (float-string style numbers from the audit)."""
+    s = ("" if value is None else str(value)).strip().strip('"')
+    if s.endswith(".0") and s[:-2].isdigit():
+        return s[:-2]
+    return s
+
+
+STAGE_PAGE_TOP_N = 10
+UNATTRIBUTED_LABEL = "Unattributed"
+
+
+def check_stage_pages(dist_html: Path, reports_root: Path, tol: float = TOL) -> CheckResult:
+    """(4b) payload.stage_pages == CSV filters (by_month/by_day/style/supplier).
+
+    For every stage of the payload's stage menu the embedded page must carry
+    exactly the CSV-derived series: monthly/daily spend (non-zero rows,
+    sorted), top-10 styles, top-10 suppliers (+ blank-supplier bucket as
+    Unattributed, pinned last), and stats (total/share/n_lines) matching
+    stage_summary. Also: Σ page totals == the stage_summary grand total, and
+    the not_booked plate flag matches the GH#16 forensic verdict stages.
+    """
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("stage_pages", PENDING, error)
+    reports_root = Path(reports_root)
+    csv_names = (
+        "stage_summary.csv",
+        "by_month_stage.csv",
+        "by_day_stage.csv",
+        "by_style_stage.csv",
+        "by_supplier_stage.csv",
+    )
+    missing = [n for n in csv_names if not (reports_root / "audit" / n).exists()]
+    if missing:
+        return CheckResult(
+            "stage_pages", PENDING, f"missing CSVs: {', '.join(missing)}"
+        )
+    summary_path = reports_root / "audit" / "stage_summary.csv"
+    summary = pd.read_csv(summary_path)
+    by_month = pd.read_csv(reports_root / "audit" / "by_month_stage.csv")
+    by_day = pd.read_csv(reports_root / "audit" / "by_day_stage.csv")
+    by_style = pd.read_csv(reports_root / "audit" / "by_style_stage.csv")
+    by_supplier = pd.read_csv(
+        reports_root / "audit" / "by_supplier_stage.csv", keep_default_na=False
+    )
+
+    menu = payload.get("stages") or []
+    pages = payload.get("stage_pages")
+    if pages is None:
+        return CheckResult("stage_pages", FAIL, "payload has no stage_pages section")
+    summary_map = {
+        r["stage"]: (int(r["n_lines"]), float(r["amount_cny"]), float(r["share_pct"]))
+        for _, r in summary.iterrows()
+    }
+
+    details: list[str] = []
+    ok = True
+    for meta in menu:
+        sid = meta["stage_id"]
+        page = pages.get(sid)
+        if page is None:
+            ok = False
+            details.append(f"{sid}: missing from payload.stage_pages")
+            continue
+
+        expected_months = (
+            by_month[(by_month["stage"] == sid) & (by_month["amount_cny"] != 0)]
+            .groupby("month")["amount_cny"].sum().round(2)
+        )
+        got_months = [(m["month"], round(float(m["amount_cny"]), 2))
+                      for m in page.get("months") or []]
+        if got_months != list(expected_months.items()):
+            ok = False
+            details.append(f"{sid}: months != by_month_stage.csv filter")
+
+        expected_days = (
+            by_day[(by_day["stage"] == sid) & (by_day["amount_cny"] != 0)]
+            .groupby("date")["amount_cny"].sum().round(2)
+        )
+        got_days = [(d["date"], round(float(d["amount_cny"]), 2))
+                    for d in page.get("days") or []]
+        if got_days != list(expected_days.items()):
+            ok = False
+            details.append(f"{sid}: days != by_day_stage.csv filter")
+
+        style_rows = by_style[(by_style["stage"] == sid) & (by_style["amount_cny"] != 0)]
+        style_rows = style_rows[style_rows["style_no"].astype(str).str.strip() != ""]
+        style_agg = {
+            _norm_style(s): round(float(a), 2)
+            for s, a in style_rows.groupby("style_no")["amount_cny"].sum().items()
+        }
+        expected_styles = sorted(style_agg.items(), key=lambda t: (-t[1], t[0]))[:STAGE_PAGE_TOP_N]
+        got_styles = sorted(
+            ((r["style_no"], round(float(r["amount_cny"]), 2))
+             for r in page.get("top_styles") or []),
+            key=lambda t: (-t[1], t[0]),
+        )
+        if got_styles != expected_styles:
+            ok = False
+            details.append(f"{sid}: top_styles != by_style_stage.csv filter")
+
+        stage_suppliers = by_supplier[by_supplier["stage"] == sid]
+        named = sorted(
+            (
+                (str(r["supplier"]).strip(), round(float(r["amount_cny"]), 2))
+                for _, r in stage_suppliers.iterrows()
+                if str(r["supplier"]).strip()
+            ),
+            key=lambda t: (-t[1], t[0]),
+        )
+        unattr = [
+            round(float(a), 2)
+            for s, a in stage_suppliers.groupby("supplier")["amount_cny"].sum().items()
+            if not str(s).strip()
+        ]
+        expected_amounts = [a for _n, a in named[:STAGE_PAGE_TOP_N]] + unattr
+        got_suppliers = page.get("top_suppliers") or []
+        got_amounts = [round(float(r["amount_cny"]), 2) for r in got_suppliers]
+        supplier_ok = len(got_amounts) == len(expected_amounts) and all(
+            abs(g - e) <= tol
+            for g, e in zip(got_amounts, expected_amounts, strict=True)
+        )
+        # labels: named rows keep the raw zh name inside 'EN (zh)'; the blank
+        # bucket is exactly 'Unattributed' and must sit last
+        if supplier_ok and named:
+            top_names = [n for n, _a in named[:STAGE_PAGE_TOP_N]]
+            for row, name in zip(got_suppliers, top_names, strict=False):
+                if name not in row["supplier"]:
+                    supplier_ok = False
+                    details.append(
+                        f"{sid}: top_suppliers label {row['supplier']!r} lost the "
+                        f"raw supplier name {name!r}"
+                    )
+        if supplier_ok and unattr:
+            if not got_suppliers or got_suppliers[-1]["supplier"] != UNATTRIBUTED_LABEL:
+                supplier_ok = False
+                details.append(f"{sid}: Unattributed bucket not pinned last")
+        if not supplier_ok:
+            ok = False
+            details.append(f"{sid}: top_suppliers != by_supplier_stage.csv filter")
+
+        n_lines, amount, share = summary_map.get(sid, (0, 0.0, 0.0))
+        stats = page.get("stats") or {}
+        stats_ok = (
+            abs(float(stats.get("total_cny", -1)) - amount) <= tol
+            and abs(float(stats.get("share_pct", -1)) - share) <= 0.05
+            and int(stats.get("n_lines", -1)) == n_lines
+        )
+        if not stats_ok:
+            ok = False
+            details.append(f"{sid}: stats != stage_summary.csv row")
+
+        if bool(page.get("not_booked")) != (sid in NOT_BOOKED_STAGES):
+            ok = False
+            details.append(f"{sid}: not_booked flag != forensic verdict")
+
+    grand_total = round(float(summary["amount_cny"].sum()), 2)
+    pages_total = round(
+        sum(float((pages.get(m["stage_id"]) or {}).get("stats", {}).get("total_cny", 0.0))
+            for m in menu),
+        2,
+    )
+    if abs(pages_total - grand_total) > tol:
+        ok = False
+        details.append(
+            f"Σ stage_pages totals {pages_total} != grand total {grand_total}"
+        )
+
+    extra = sorted(set(pages) - {m["stage_id"] for m in menu})
+    if extra:
+        ok = False
+        details.append(f"stage_pages has stages outside the menu: {', '.join(extra)}")
+
+    return CheckResult(
+        "stage_pages",
+        OK if ok else FAIL,
+        f"stage_pages == CSV filters for {len(menu)} stages "
+        f"(months/days/styles/suppliers/stats); Σ pages == grand total {grand_total:.2f}",
+        details,
+    )
+
+
+def check_ideal_timeline(dist_html: Path) -> CheckResult:
+    """(4c) payload.ideal_timeline: bars exist, every source url/file non-empty."""
+    payload, error = _load_dash_payload(dist_html)
+    if payload is None:
+        return CheckResult("ideal_timeline", PENDING, error)
+    it = payload.get("ideal_timeline")
+    if not it or not it.get("bars"):
+        return CheckResult("ideal_timeline", FAIL, "payload has no ideal_timeline bars")
+    details: list[str] = []
+    ok = True
+    for b in it["bars"]:
+        label = b.get("label", "?")
+        if not str(b.get("source_url", "")).startswith("http"):
+            ok = False
+            details.append(f"{label}: source_url missing/not http")
+        if not str(b.get("source_file", "")).strip():
+            ok = False
+            details.append(f"{label}: source_file empty")
+    return CheckResult(
+        "ideal_timeline",
+        OK if ok else FAIL,
+        f"ideal_timeline: {len(it['bars'])} bars, all sources non-empty",
+        details,
+    )
+
+
 def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True)
 
@@ -530,6 +752,8 @@ def run_checks(
         check_audit_totals(reports_root, data_root),
         check_stage_totals(reports_root),
         check_dashboard_payload(dist_html, reports_root),
+        check_stage_pages(dist_html, reports_root),
+        check_ideal_timeline(dist_html),
         check_git_hygiene(repo_root),
         check_qty_amount(data_root),
     ]

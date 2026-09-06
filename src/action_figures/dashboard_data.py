@@ -741,7 +741,7 @@ def build_stage_pages(
         months = [{"month": m, "amount_cny": month_map[m]}
                   for m in sorted(month_map)]
         day_map = {r["date"]: r["amount_cny"] for r in by_day
-                   if r["stage"] == sid and r["amount_cny"]}
+                   if r["stage"] == sid and r["date"] and r["amount_cny"]}
         days = [{"date": d, "amount_cny": day_map[d]} for d in sorted(day_map)]
 
         named = [(s["supplier"], s["stage_mix"][sid])
