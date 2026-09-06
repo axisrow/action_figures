@@ -18,7 +18,12 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
-from action_figures.audit_tables import by_day_stage, by_supplier_stage  # noqa: E402
+from action_figures.audit_tables import (  # noqa: E402
+    by_day_stage,
+    by_supplier_month,
+    by_supplier_stage,
+    by_supplier_style,
+)
 from action_figures.classify import classify_df, load_taxonomy  # noqa: E402
 from action_figures.stages_meta import stages_metadata  # noqa: E402
 
@@ -142,6 +147,14 @@ def main() -> None:
     supplier_sum = by_supplier["amount_cny"].sum()
     print(f"supplier sum:  {supplier_sum:.2f}  "
           f"(diff {supplier_sum - total_amount:+.4f})")
+
+    # by_supplier_month.csv / by_supplier_style.csv (GH#28 supplier cards)
+    by_supplier_month(all_df).to_csv(
+        REPORTS_DIR / "by_supplier_month.csv", index=False
+    )
+    by_supplier_style(all_df).to_csv(
+        REPORTS_DIR / "by_supplier_style.csv", index=False
+    )
 
     # by_day_stage.csv (Process Explorer timeline)
     by_day = by_day_stage(all_df)

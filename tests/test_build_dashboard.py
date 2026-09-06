@@ -34,12 +34,13 @@ def test_mock_data_matches_real_schema(mock_data):
         "glossary",
         "stages",
         "stage_pages",
+        "supplier_pages",
         "ideal_timeline",
         "ia",
     }
     assert mock_data["overview"]["tiles"]["total_spend_cny"] > 0
     assert mock_data["overview"]["sankey"]["links"]
-    assert len(mock_data["overview"]["sankey"]["top_suppliers"]) <= 11  # top-10 + Others
+    assert len(mock_data["overview"]["sankey"]["top_suppliers"]) <= 12  # top-10 + Others + Unattributed
     assert len(mock_data["suppliers"]["top"]) == 10
     assert mock_data["timelines"]["gantt"][0]["total_days"] >= \
         mock_data["timelines"]["gantt"][-1]["total_days"]
@@ -407,6 +408,82 @@ def test_html_stage_page_not_booked_plate(html):
 
 def test_html_stage_page_renders_avg_line_stat(html):
     assert "Avg per line" in html
+
+
+# --- EI-3 (GH#28): supplier cards + clickable catalog ----------------------
+
+
+def test_mock_payload_has_supplier_pages_for_every_supplier(mock_data):
+    pages = mock_data["supplier_pages"]
+    assert set(pages) == {s["supplier"] for s in mock_data["suppliers"]["all"]}
+    assert "Unattributed" in pages
+    page = pages["Ningbo Tooling Co"]
+    assert page["months"]  # legacy mock rows carry per-month amounts
+    assert page["stage_mix"][0]["stage"] == "tooling_molds"
+    assert page["stats"]["months_active"] >= 1
+    assert pages["Unattributed"]["is_unattributed"] is True
+
+
+def test_mock_supplier_pages_totals_reconcile(mock_data):
+    """Card totals must equal the catalog table totals (acceptance)."""
+    pages = mock_data["supplier_pages"]
+    for s in mock_data["suppliers"]["all"]:
+        assert pages[s["supplier"]]["stats"]["total_cny"] == s["amount_cny"]
+
+
+def test_html_supplier_view_skeleton(html):
+    view = html.split('id="supplier-view"', 1)[1].split("</section>", 1)[0]
+    assert 'id="supplier-title"' in view
+    assert 'id="supplier-stats"' in view
+    assert 'id="supplier-chart-mix"' in view
+    assert 'id="supplier-chart-monthly"' in view
+    assert 'id="supplier-tbl-styles"' in view
+    assert 'id="supplier-forensics"' in view
+    # back button targets the shell's Suppliers tab route
+    assert 'href="#/tab/suppliers"' in view
+    assert "← Back to suppliers" in view
+
+
+def test_html_supplier_catalog_rows_are_clickable(html):
+    """Every catalog table row links to #/supplier/<encoded name>."""
+    import json
+    import urllib.parse
+
+    payload = html[html.index(">", html.index('id="dash-data"')) + 1:
+                   html.index("</script>", html.index('id="dash-data"'))]
+    names = [s["supplier"] for s in json.loads(payload)["suppliers"]["all"]]
+    table = html.split('class="supplier-table"', 1)[1].split("</table>", 1)[0]
+    hrefs = [urllib.parse.unquote(h) for h in
+             __import__("re").findall(r'href="#/supplier/([^"]+)"', table)]
+    assert hrefs == names  # every row, in catalog order (Unattributed last)
+
+
+def test_html_supplier_cards_link_to_subscreen(html):
+    import re
+
+    cards = html.split('id="sup-cards"', 1)[1].split("<table", 1)[0]
+    assert len(re.findall(r'href="#/supplier/', cards)) == 10  # top-10 cards
+
+
+def test_html_supplier_router_decodes_names(html):
+    """zh supplier names travel URL-encoded; the router must decode before
+    the payload lookup or every real-data card 404s into Home."""
+    router = html.split("function route()", 1)[1].split(
+        "window.addEventListener('hashchange'", 1
+    )[0]
+    assert "#\\/supplier\\/" in router
+    assert "decodeURIComponent" in router
+    assert "supplierPages" in router
+    # supplier pages ride the shell's breadcrumbs + nav deactivation
+    assert "crumbItems(['Home', 'Suppliers'," in router
+    assert "setNav('')" in router
+
+
+def test_html_unattributed_card_forensics_text(html):
+    """The Unattributed page carries the forensic explanation (lump sums,
+    mold prepayments) from the payload — rendered client-side."""
+    assert "lump-sum internal transfers" in html
+    assert "mold prepayments" in html
 
 
 # --- EI-1: IA spec + design tokens + app shell (nav/breadcrumbs/router) ---
